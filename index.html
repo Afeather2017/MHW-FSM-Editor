@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>FSM Studio — MHW 状态机编辑器</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header id="toolbar">
+  <span id="brand">FSM&nbsp;Studio</span>
+  <button id="btnOpen" class="primary">打开…</button>
+  <span id="fileLabel">未打开文件</span>
+  <span id="dirtyBadge"></span>
+  <button id="btnSave" disabled>保存</button>
+  <button id="btnSaveAs" disabled>另存为…</button>
+  <button id="btnExportXml" disabled>导出 XML</button>
+  <span class="sep"></span>
+  <button id="btnUndo" disabled title="Ctrl+Z">撤销</button>
+  <button id="btnRedo" disabled title="Ctrl+Y">重做</button>
+  <span class="sep"></span>
+  <input id="search" type="text" placeholder="搜索节点 / ActionNo / 条件… (Ctrl+F)">
+  <button id="btnNewAction" title="新建带 Action 流程的节点">＋Action</button>
+  <button id="btnNewMotion" title="新建带 LinkMotion 流程的节点">＋Motion</button>
+  <button id="btnNewPlain" title="新建无流程的空节点">＋空节点</button>
+  <button id="btnEdgeZ" class="active" title="连线画在卡片上层，避免遮挡看漏条件">边在顶层</button>
+  <button id="btnLayout">自动布局</button>
+  <button id="btnFit" title="F">适应视图</button>
+</header>
+<main>
+  <aside id="sidebar">
+    <div id="tabs">
+      <button id="tabNodes" class="active">节点</button>
+      <button id="tabConds">条件</button>
+    </div>
+    <div id="nodeList"></div>
+    <div id="sbResize" class="resize" title="拖动调整宽度"></div>
+  </aside>
+  <div id="canvasWrap">
+    <svg id="canvas"></svg>
+    <div id="mouseHint">中键拖动 = 平移 · 滚轮 = 缩放 · 左键 = 选择 · 右键 = 菜单</div>
+  </div>
+  <aside id="inspectorWrap">
+    <div id="inspResize" class="resize" title="拖动调整宽度"></div>
+    <div id="inspector"></div>
+  </aside>
+</main>
+<footer id="statusBar">
+  <span id="statusText">就绪</span>
+  <span id="zoomLabel">100%</span>
+</footer>
+<div id="dropOverlay">松开以打开 .fsm / .xml</div>
+<script src="dist/app.js"></script>
+</body>
+</html>

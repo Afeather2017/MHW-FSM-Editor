@@ -1,0 +1,407 @@
+[
+ {
+  "hash": 1723094544,
+  "members": [
+   {
+    "name": "mQuality",
+    "type": 6,
+    "flags": 145,
+    "size": 4
+   },
+   {
+    "name": "mOwnerObjectName",
+    "type": 14,
+    "flags": 0,
+    "size": 8
+   },
+   {
+    "name": "mpRootCluster",
+    "type": 2,
+    "flags": 0,
+    "size": 8
+   },
+   {
+    "name": "mpConditionTree",
+    "type": 2,
+    "flags": 0,
+    "size": 8
+   },
+   {
+    "name": "mFSMAttribute",
+    "type": 6,
+    "flags": 0,
+    "size": 4
+   },
+   {
+    "name": "mLastEditType",
+    "type": 6,
+    "flags": 0,
+    "size": 4
+   }
+  ]
+ },
+ {
+  "hash": 411468038,
+  "members": [
+   {
+    "name": "mId",
+    "type": 6,
+    "flags": 0,
+    "size": 4
+   },
+   {
+    "name": "mOwnerNodeUniqueId",
+    "type": 6,
+    "flags": 0,
+    "size": 4
+   },
+   {
+    "name": "mInitialStateId",
+    "type": 6,
+    "flags": 0,
+    "size": 4
+   },
+   {
+    "name": "mpNodeList",
+    "type": 2,
+    "flags": 160,
+    "size": 8
+   }
+  ]
+ },
+ {
+  "hash": 1345706237,
+  "members": [
+   {
+    "name": "mName",
+    "type": 14,
+    "flags": 0,
+    "size": 8
+   },
+   {
+    "name": "mId",
+    "type": 6,
+    "flags": 0,
+    "size": 4
+   },
+   {
+    "name": "mUniqueId",
+    "type": 6,
+    "flags": 0,
+    "size": 4
+   },
+   {
+    "name": "mOwnerId",
+    "type": 6,
+    "flags": 0,
+    "size": 4
+   },
+   {
+    "name": "mpSubCluster",
+    "type": 2,
+    "flags": 0,
+    "size": 8
+   },
+   {
+    "name": "mpLinkList",
+    "type": 2,
+    "flags": 160,
+    "size": 8
+   },
+   {
+    "name": "mpProcessList",
+    "type": 2,
+    "flags": 160,
+    "size": 8
+   },
+   {
+    "name": "mUIPos",
+    "type": 6,
+    "flags": 0,
+    "size": 4
+   },
+   {
+    "name": "mColorType",
+    "type": 4,
+    "flags": 0,
+    "size": 1
+   },
+   {
+    "name": "mSetting",
+    "type": 6,
+    "flags": 0,
+    "size": 4
+   },
+   {
+    "name": "mUserAttribute",
+    "type": 6,
+    "flags": 0,
+    "size": 4
+   },
+   {
+    "name": "mExistConditionTrainsitionFromAll",
+    "type": 3,
+    "flags": 0,
+    "size": 1
+   },
+   {
+    "name": "mConditionTrainsitionFromAllId",
+    "type": 6,
+    "flags": 0,
+    "size": 4
+   }
+  ]
+ },
+ {
+  "hash": 1676061001,
+  "members": [
+   {
+    "name": "mName",
+    "type": 14,
+    "flags": 0,
+    "size": 8
+   },
+   {
+    "name": "mDestinationNodeId",
+    "type": 6,
+    "flags": 0,
+    "size": 4
+   },
+   {
+    "name": "mExistCondition",
+    "type": 3,
+    "flags": 0,
+    "size": 1
+   },
+   {
+    "name": "mConditionId",
+    "type": 6,
+    "flags": 0,
+    "size": 4
+   }
+  ]
+ },
+ {
+  "hash": 1620948288,
+  "members": [
+   {
+    "name": "mContainerName",
+    "type": 14,
+    "flags": 0,
+    "size": 8
+   },
+   {
+    "name": "mCategoryName",
+    "type": 14,
+    "flags": 0,
+    "size": 8
+   },
+   {
+    "name": "mpParameter",
+    "type": 2,
+    "flags": 0,
+    "size": 8
+   }
+  ]
+ },
+ {
+  "hash": 1314856239,
+  "members": [
+   {
+    "name": "ActionNo",
+    "type": 1,
+    "flags": 4,
+    "size": 8
+   }
+  ]
+ },
+ {
+  "hash": 2120343442,
+  "members": [
+   {
+    "name": "EnumValue",
+    "type": 10,
+    "flags": 128,
+    "size": 4
+   }
+  ]
+ },
+ {
+  "hash": 431532545,
+  "members": [
+   {
+    "name": "MotionNo",
+    "type": 10,
+    "flags": 0,
+    "size": 4
+   },
+   {
+    "name": "MotionNo_Phase1",
+    "type": 10,
+    "flags": 0,
+    "size": 4
+   }
+  ]
+ },
+ {
+  "hash": 2019452450,
+  "members": [
+   {
+    "name": "mQuality",
+    "type": 6,
+    "flags": 145,
+    "size": 4
+   },
+   {
+    "name": "mpTreeList",
+    "type": 2,
+    "flags": 160,
+    "size": 8
+   }
+  ]
+ },
+ {
+  "hash": 1455101785,
+  "members": [
+   {
+    "name": "mName",
+    "type": 1,
+    "flags": 0,
+    "size": 8
+   },
+   {
+    "name": "mpRootNode",
+    "type": 2,
+    "flags": 0,
+    "size": 8
+   }
+  ]
+ },
+ {
+  "hash": 740917853,
+  "members": [
+   {
+    "name": "mId",
+    "type": 6,
+    "flags": 0,
+    "size": 4
+   }
+  ]
+ },
+ {
+  "hash": 473071737,
+  "members": [
+   {
+    "name": "mpChildList",
+    "type": 2,
+    "flags": 160,
+    "size": 8
+   },
+   {
+    "name": "mOperator",
+    "type": 6,
+    "flags": 0,
+    "size": 4
+   }
+  ]
+ },
+ {
+  "hash": 1033179304,
+  "members": [
+   {
+    "name": "mpChildList",
+    "type": 2,
+    "flags": 160,
+    "size": 8
+   },
+   {
+    "name": "mVariable",
+    "type": 1,
+    "flags": 0,
+    "size": 8
+   },
+   {
+    "name": "mIsBitNo",
+    "type": 3,
+    "flags": 0,
+    "size": 1
+   },
+   {
+    "name": "mIsArray",
+    "type": 3,
+    "flags": 0,
+    "size": 1
+   },
+   {
+    "name": "mIsDynamicIndex",
+    "type": 3,
+    "flags": 0,
+    "size": 1
+   },
+   {
+    "name": "mIndex",
+    "type": 6,
+    "flags": 0,
+    "size": 4
+   },
+   {
+    "name": "mIndexVariable",
+    "type": 1,
+    "flags": 0,
+    "size": 8
+   },
+   {
+    "name": "mUseEnumIndex",
+    "type": 3,
+    "flags": 0,
+    "size": 1
+   },
+   {
+    "name": "mIndexEnum",
+    "type": 1,
+    "flags": 0,
+    "size": 8
+   }
+  ]
+ },
+ {
+  "hash": 1042257449,
+  "members": [
+   {
+    "name": "mPropertyName",
+    "type": 14,
+    "flags": 0,
+    "size": 8
+   },
+   {
+    "name": "mOwnerName",
+    "type": 14,
+    "flags": 0,
+    "size": 8
+   },
+   {
+    "name": "mIsSingletonOwner",
+    "type": 3,
+    "flags": 0,
+    "size": 1
+   }
+  ]
+ },
+ {
+  "hash": 1748142764,
+  "members": [
+   {
+    "name": "mNameCRC",
+    "type": 6,
+    "flags": 1,
+    "size": 4
+   },
+   {
+    "name": "mEnumNameCRC",
+    "type": 6,
+    "flags": 1,
+    "size": 4
+   }
+  ]
+ }
+]

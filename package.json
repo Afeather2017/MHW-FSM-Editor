@@ -1,0 +1,19 @@
+{
+  "name": "fsm-studio",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Browser-based FSM editor for Monster Hunter World .fsm files — standalone replacement for the in-game XFsm editing loop.",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build:app": "esbuild src/app.ts --bundle --outfile=dist/app.js --target=es2020 --charset=utf8",
+    "build:test": "esbuild tests/run.ts --bundle --platform=node --outfile=.tmp/tests.cjs --charset=utf8",
+    "test": "npm run build:test && node .tmp/tests.cjs",
+    "build": "npm run typecheck && npm run build:app && npm run test",
+    "start": "node serve.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.2",
+    "esbuild": "^0.28.2",
+    "typescript": "^7.0.2"
+  }
+}
