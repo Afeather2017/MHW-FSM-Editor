@@ -225,7 +225,6 @@ const graph = new GraphView($('canvas') as unknown as SVGSVGElement, {
       openContextMenu(nodeMenuItems(ctx.nodeId, ctx.world), ctx.screen.x, ctx.screen.y);
     } else if (ctx.kind === 'link' && ctx.nodeId !== undefined && ctx.linkIndex !== undefined) {
       const link = model.linksOf(model.nodeById(ctx.nodeId)!)[ctx.linkIndex];
-      const condId = link ? model.getNum(link, 'mConditionId') : 0;
       const hasCond = link ? model.getNum(link, 'mExistCondition') === 1 : false;
       const linkTotal = model.linksOf(model.nodeById(ctx.nodeId)!).length;
       openContextMenu([
@@ -235,27 +234,19 @@ const graph = new GraphView($('canvas') as unknown as SVGSVGElement, {
         ...(ctx.linkIndex < linkTotal - 1
           ? [{ label: '↓ 下移（更晚判定）', action: () => reorderLink(ctx.nodeId!, ctx.linkIndex!, 1) }]
           : []),
-        hasCond
-          ? {
-              label: `编辑条件 #${condId}`,
-              action: () => {
-                selection = { kind: 'condition', condIndex: condId };
-                document.getElementById('tabConds')?.click();
-                renderSide();
-                updateInspector();
-              },
-            }
-          : {
+        // condition-less links only: create one and edit it inline in the link panel
+        ...(!hasCond
+          ? [{
               label: '新建组合条件…',
               action: () => {
                 model!.snapshot();
                 const created = model!.addCondition();
                 model!.setField(link!, 'mExistCondition', 1);
                 model!.setField(link!, 'mConditionId', created.index);
-                selection = { kind: 'condition', condIndex: created.index };
                 renderAll();
               },
-            },
+            }]
+          : []),
         { label: '---' },
         {
           label: '删除此链接',

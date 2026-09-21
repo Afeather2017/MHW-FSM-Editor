@@ -351,20 +351,21 @@ function renderLink(m: FsmModel, host: InspectorHost, root: HTMLElement, nodeId:
     }
     m.setField(link, 'mExistCondition', 1);
     m.setField(link, 'mConditionId', created.index);
-    host.selection = { kind: 'condition', condIndex: created.index };
+    // stay on the link panel: the new condition is edited inline below
     host.requestRender();
   }, 'mini');
-  const src = m.conditions()[m.getNum(link, 'mConditionId')];
-  if (m.getNum(link, 'mExistCondition') === 1 && src) {
-    button(r, '编辑条件', () => {
-      host.setSelection({ kind: 'condition', condIndex: m.getNum(link, 'mConditionId') });
-      document.getElementById('tabConds')?.click();
-      host.requestRender();
-    }, 'linkish');
-  }
 
   r = row(box, '链接名');
   textInput(r, m.str(link, 'mName'), (v) => { m.snapshot(); m.setField(link, 'mName', v); });
+
+  // one link has exactly one condition, so edit it right here — no jump needed
+  const condId = m.getNum(link, 'mConditionId');
+  if (m.getNum(link, 'mExistCondition') === 1 && m.conditions()[condId]) {
+    const embed = document.createElement('div');
+    embed.className = 'linkCondEmbed';
+    box.appendChild(embed);
+    renderConditionEditor(m, host, embed, condId, { backToLink: { nodeId, linkIndex } });
+  }
 
   const dz = section(root, '操作');
   const reorderRow = document.createElement('div');
@@ -389,7 +390,13 @@ function renderLink(m: FsmModel, host: InspectorHost, root: HTMLElement, nodeId:
 
 // ----- condition list & tree editor -----
 
-export function renderConditionEditor(m: FsmModel, host: InspectorHost, root: HTMLElement, condIndex: number): void {
+export function renderConditionEditor(
+  m: FsmModel,
+  host: InspectorHost,
+  root: HTMLElement,
+  condIndex: number,
+  opts: { backToLink?: { nodeId: number; linkIndex: number } } = {},
+): void {
   const tree = m.conditions()[condIndex];
   if (!tree) { root.innerHTML = '<div class="inspEmpty">条件已被删除</div>'; return; }
   const box = section(root, `条件 #${condIndex}`);
@@ -525,7 +532,8 @@ export function renderConditionEditor(m: FsmModel, host: InspectorHost, root: HT
     if (!confirm(`删除条件 #${condIndex}？引用它的链接将变为无条件。`)) return;
     m.snapshot();
     m.deleteCondition(condIndex);
-    host.setSelection({ kind: 'none' });
+    if (opts.backToLink) host.setSelection({ kind: 'link', nodeId: opts.backToLink.nodeId, linkIndex: opts.backToLink.linkIndex });
+    else host.setSelection({ kind: 'none' });
     host.requestRender();
   }, 'danger');
 }

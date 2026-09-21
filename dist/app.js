@@ -2535,22 +2535,20 @@
       }
       m2.setField(link, "mExistCondition", 1);
       m2.setField(link, "mConditionId", created.index);
-      host.selection = { kind: "condition", condIndex: created.index };
       host.requestRender();
     }, "mini");
-    const src = m2.conditions()[m2.getNum(link, "mConditionId")];
-    if (m2.getNum(link, "mExistCondition") === 1 && src) {
-      button(r, "编辑条件", () => {
-        host.setSelection({ kind: "condition", condIndex: m2.getNum(link, "mConditionId") });
-        document.getElementById("tabConds")?.click();
-        host.requestRender();
-      }, "linkish");
-    }
     r = row(box, "链接名");
     textInput(r, m2.str(link, "mName"), (v) => {
       m2.snapshot();
       m2.setField(link, "mName", v);
     });
+    const condId = m2.getNum(link, "mConditionId");
+    if (m2.getNum(link, "mExistCondition") === 1 && m2.conditions()[condId]) {
+      const embed = document.createElement("div");
+      embed.className = "linkCondEmbed";
+      box.appendChild(embed);
+      renderConditionEditor(m2, host, embed, condId, { backToLink: { nodeId, linkIndex } });
+    }
     const dz = section(root, "操作");
     const reorderRow = document.createElement("div");
     reorderRow.className = "row";
@@ -2569,7 +2567,7 @@
       host.requestRender();
     }, "danger");
   }
-  function renderConditionEditor(m2, host, root, condIndex) {
+  function renderConditionEditor(m2, host, root, condIndex, opts = {}) {
     const tree = m2.conditions()[condIndex];
     if (!tree) {
       root.innerHTML = '<div class="inspEmpty">条件已被删除</div>';
@@ -2717,7 +2715,8 @@
       if (!confirm(`删除条件 #${condIndex}？引用它的链接将变为无条件。`)) return;
       m2.snapshot();
       m2.deleteCondition(condIndex);
-      host.setSelection({ kind: "none" });
+      if (opts.backToLink) host.setSelection({ kind: "link", nodeId: opts.backToLink.nodeId, linkIndex: opts.backToLink.linkIndex });
+      else host.setSelection({ kind: "none" });
       host.requestRender();
     }, "danger");
   }
@@ -3065,31 +3064,22 @@
         openContextMenu(nodeMenuItems(ctx.nodeId, ctx.world), ctx.screen.x, ctx.screen.y);
       } else if (ctx.kind === "link" && ctx.nodeId !== void 0 && ctx.linkIndex !== void 0) {
         const link = model.linksOf(model.nodeById(ctx.nodeId))[ctx.linkIndex];
-        const condId = link ? model.getNum(link, "mConditionId") : 0;
         const hasCond = link ? model.getNum(link, "mExistCondition") === 1 : false;
         const linkTotal = model.linksOf(model.nodeById(ctx.nodeId)).length;
         openContextMenu([
           ...ctx.linkIndex > 0 ? [{ label: "↑ 上移（更早判定）", action: () => reorderLink(ctx.nodeId, ctx.linkIndex, -1) }] : [],
           ...ctx.linkIndex < linkTotal - 1 ? [{ label: "↓ 下移（更晚判定）", action: () => reorderLink(ctx.nodeId, ctx.linkIndex, 1) }] : [],
-          hasCond ? {
-            label: `编辑条件 #${condId}`,
-            action: () => {
-              selection = { kind: "condition", condIndex: condId };
-              document.getElementById("tabConds")?.click();
-              renderSide();
-              updateInspector();
-            }
-          } : {
+          // condition-less links only: create one and edit it inline in the link panel
+          ...!hasCond ? [{
             label: "新建组合条件…",
             action: () => {
               model.snapshot();
               const created = model.addCondition();
               model.setField(link, "mExistCondition", 1);
               model.setField(link, "mConditionId", created.index);
-              selection = { kind: "condition", condIndex: created.index };
               renderAll();
             }
-          },
+          }] : [],
           { label: "---" },
           {
             label: "删除此链接",
