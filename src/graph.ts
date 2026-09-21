@@ -4,6 +4,13 @@ import { XfsInstance } from './xfs';
 
 export interface Point { x: number; y: number; }
 
+/** portable layout info for project files (.fsmp.json) */
+export interface ProjectLayout {
+  positions: Record<string, Point>;
+  view?: { x: number; y: number; z: number };
+  edgesOnTop?: boolean;
+}
+
 export interface GraphCallbacks {
   onSelectNode(nodeId: number): void;
   onSelectLink(nodeId: number, linkIndex: number): void;
@@ -585,6 +592,42 @@ export class GraphView {
     try {
       localStorage.setItem(this.posKey(), JSON.stringify(Object.fromEntries(this.positions)));
     } catch { /* ignore */ }
+  }
+
+  // ----- project files -----
+
+  /** current layout for project files (.fsmp.json) */
+  getLayout(): ProjectLayout {
+    return {
+      positions: Object.fromEntries(this.positions),
+      view: { ...this.view },
+      edgesOnTop: this.edgesOnTop,
+    };
+  }
+
+  /** apply a project layout. Only positions of node ids that exist in the
+   *  current model are taken; the rest keep their current spot. Returns how
+   *  many saved entries matched. */
+  applyLayout(layout: ProjectLayout): { matched: number; total: number } {
+    if (!this.model) return { matched: 0, total: 0 };
+    const ids = new Set(this.model.nodes().map((nd) => this.model!.getNum(nd, 'mId')));
+    let matched = 0;
+    const entries = Object.entries(layout.positions ?? {});
+    for (const [k, p] of entries) {
+      const id = Number(k);
+      if (ids.has(id) && p && Number.isFinite(p.x) && Number.isFinite(p.y)) {
+        this.positions.set(id, { x: Math.round(p.x), y: Math.round(p.y) });
+        matched++;
+      }
+    }
+    if (layout.view && Number.isFinite(layout.view.x) && Number.isFinite(layout.view.y) && Number.isFinite(layout.view.z)) {
+      this.view = { ...layout.view };
+      this.applyView();
+    }
+    if (typeof layout.edgesOnTop === 'boolean') this.setEdgesOnTop(layout.edgesOnTop);
+    this.savePositions();
+    this.render();
+    return { matched, total: entries.length };
   }
 
   // ----- rendering -----

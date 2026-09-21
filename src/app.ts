@@ -1,11 +1,12 @@
 // Application shell: file I/O, toolbar, sidebar, wiring graph + inspector.
 import { FsmModel, Selection } from './model';
-import { GraphView } from './graph';
+import { GraphView, ProjectLayout } from './graph';
 import { renderInspector as paintInspector } from './inspector';
 
 let model: FsmModel | null = null;
 let selection: Selection = { kind: 'none' };
 let fileHandle: FileSystemFileHandle | null = null;
+let projectHandle: FileSystemFileHandle | null = null;
 let search = '';
 
 const $ = <T extends HTMLElement>(id: string): T => document.getElementById(id) as T;
@@ -170,7 +171,7 @@ async function pickOpen(): Promise<{ bytes: Uint8Array; name: string; handle: Fi
   });
 }
 
-async function pickSave(name: string, kind: 'fsm' | 'xml', data: Uint8Array | string): Promise<FileSystemFileHandle | null> {
+async function pickSave(name: string, kind: 'fsm' | 'xml' | 'json', data: Uint8Array | string): Promise<FileSystemFileHandle | null> {
   const blobPart: BlobPart = typeof data === 'string' ? data : data.slice().buffer as ArrayBuffer;
   if (hasFsApi()) {
     try {
@@ -178,7 +179,9 @@ async function pickSave(name: string, kind: 'fsm' | 'xml', data: Uint8Array | st
         suggestedName: name,
         types: [kind === 'fsm'
           ? { description: 'MHW FSM', accept: { 'application/octet-stream': ['.fsm'] } }
-          : { description: 'MtSerializer XML', accept: { 'text/xml': ['.xml'] } }],
+          : kind === 'xml'
+          ? { description: 'MtSerializer XML', accept: { 'text/xml': ['.xml'] } }
+          : { description: 'FSM Studio 项目', accept: { 'application/json': ['.json'] } }],
       });
       const w = await handle.createWritable();
       await w.write(new Blob([blobPart]));
@@ -196,6 +199,32 @@ async function pickSave(name: string, kind: 'fsm' | 'xml', data: Uint8Array | st
   a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 5000);
   return null;
+}
+
+async function pickProject(): Promise<{ text: string; handle: FileSystemFileHandle | null } | null> {
+  if (hasFsApi()) {
+    try {
+      const [handle] = await openPicker({
+        types: [{ description: 'FSM Studio 项目', accept: { 'application/json': ['.json'] } }],
+      });
+      const file = await handle.getFile();
+      return { text: await file.text(), handle };
+    } catch (e) {
+      if ((e as Error).name === 'AbortError') return null;
+      // fall through to input fallback
+    }
+  }
+  return new Promise((resolve) => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.json';
+    input.onchange = async () => {
+      const file = input.files?.[0];
+      if (!file) return resolve(null);
+      resolve({ text: await file.text(), handle: null });
+    };
+    input.click();
+  });
 }
 
 async function saveToHandle(handle: FileSystemFileHandle, data: Uint8Array | string): Promise<void> {
@@ -310,6 +339,8 @@ function renderAll(): void {
   btn('btnSave').disabled = !model;
   btn('btnSaveAs').disabled = !model;
   btn('btnExportXml').disabled = !model;
+  btn('btnProjOpen').disabled = !model;
+  btn('btnProjSave').disabled = !model;
   btn('btnUndo').disabled = !model?.canUndo();
   btn('btnRedo').disabled = !model?.canRedo();
   applySearch();
@@ -476,12 +507,77 @@ async function doExportXml(): Promise<void> {
   await pickSave(outName, 'xml', model.toXml());
 }
 
+// ---------- project files (.fsmp.json): node positions, view, layout prefs ----------
+
+const PROJECT_TYPE = 'fsm-studio-project';
+
+function projectJson(): string {
+  const layout: ProjectLayout = graph.getLayout();
+  const proj = {
+    type: PROJECT_TYPE,
+    version: 1,
+    source: model?.fileName ?? '',
+    format: model?.format ?? 'binary',
+    savedAt: new Date().toISOString(),
+    ...layout,
+  };
+  return JSON.stringify(proj, null, 2);
+}
+
+function applyProject(data: unknown): string {
+  if (!model) return '请先打开 .fsm / .xml 文件';
+  const proj = data as Partial<ProjectLayout> & { type?: string };
+  if (!proj || typeof proj !== 'object' || proj.type !== PROJECT_TYPE) return '不是 FSM Studio 项目文件';
+  const { matched, total } = graph.applyLayout(proj as ProjectLayout);
+  // keep the toolbar toggle in sync with the applied preference
+  btn('btnEdgeZ').classList.toggle('active', graph.edgesOnTop);
+  localStorage.setItem('fsmstudio.edgesOnTop', graph.edgesOnTop ? '1' : '0');
+  renderAll();
+  const note = matched < total ? `（项目里有 ${total - matched} 个位置与当前 FSM 不匹配，已跳过）` : '';
+  return `项目已应用：${matched} 个节点位置${note}`;
+}
+
+async function doSaveProject(): Promise<void> {
+  if (!model) return;
+  const base = (model.fileName || 'untitled.fsm').replace(/\.(fsm|xml)$/i, '');
+  if (projectHandle) {
+    try {
+      await saveToHandle(projectHandle, projectJson());
+      $('statusText').textContent = `项目已保存：${projectHandle.name}`;
+      return;
+    } catch { /* permission lost etc. — fall through to picker */ }
+  }
+  const handle = await pickSave(base + '.fsmp.json', 'json', projectJson());
+  if (handle) {
+    projectHandle = handle;
+    $('statusText').textContent = `项目已保存：${handle.name}`;
+  }
+}
+
+async function doOpenProject(): Promise<void> {
+  if (!model) return;
+  const picked = await pickProject();
+  if (!picked) return;
+  let data: unknown;
+  try {
+    data = JSON.parse(picked.text);
+  } catch (e) {
+    alert(`打开项目失败: ${(e as Error).message}`);
+    return;
+  }
+  const result = applyProject(data);
+  if (picked.handle) projectHandle = picked.handle;
+  $('statusText').textContent = result;
+}
+
 // ---------- events ----------
 
 $('btnOpen').addEventListener('click', () => void doOpen());
 $('btnSave').addEventListener('click', () => void doSave(false));
 $('btnSaveAs').addEventListener('click', () => void doSave(true));
 $('btnExportXml').addEventListener('click', () => void doExportXml());
+$('btnProjOpen').addEventListener('click', () => void doOpenProject());
+$('btnProjSave').addEventListener('click', () => void doSaveProject());
 $('btnUndo').addEventListener('click', () => model?.undo());
 $('btnRedo').addEventListener('click', () => model?.redo());
 $('btnLayout').addEventListener('click', () => graph.autoLayout());
@@ -529,7 +625,12 @@ document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') (e.target as HTMLElement).blur();
     return;
   }
-  if (e.ctrlKey && e.key.toLowerCase() === 's') { e.preventDefault(); void doSave(false); return; }
+  if (e.ctrlKey && e.key.toLowerCase() === 's') {
+    e.preventDefault();
+    if (e.shiftKey) void doSaveProject();
+    else void doSave(false);
+    return;
+  }
   if (e.ctrlKey && e.key.toLowerCase() === 'z') { e.preventDefault(); model?.undo(); return; }
   if (e.ctrlKey && (e.key.toLowerCase() === 'y' || (e.shiftKey && e.key.toLowerCase() === 'z'))) { e.preventDefault(); model?.redo(); return; }
   if (e.ctrlKey && e.key.toLowerCase() === 'f') { e.preventDefault(); $('search').focus(); return; }
@@ -570,10 +671,22 @@ wrap.addEventListener('drop', async (e) => {
   const file = e.dataTransfer?.files?.[0];
   if (!file) return;
   const bytes = new Uint8Array(await file.arrayBuffer());
+  // project files apply the layout to the currently open FSM
+  if (/\.json$/i.test(file.name)) {
+    try {
+      const data: unknown = JSON.parse(new TextDecoder('utf-8').decode(bytes));
+      const result = applyProject(data);
+      $('statusText').textContent = `${file.name}: ${result}`;
+    } catch (err) {
+      alert(`打开项目失败: ${(err as Error).message}`);
+    }
+    return;
+  }
   try {
     if (/\.xml$/i.test(file.name)) model = FsmModel.fromXml(new TextDecoder('utf-8').decode(bytes), file.name);
     else model = FsmModel.fromBinary(bytes, file.name);
     fileHandle = null;
+    projectHandle = null;
     selection = { kind: 'none' };
     ensureChangeHook();
     graph.setModel(model);
@@ -671,4 +784,14 @@ w['FSM_STUDIO_EXPORT'] = (): string => {
   let s = '';
   for (const b of bytes) s += String.fromCharCode(b);
   return btoa(s);
+};
+w['FSM_STUDIO_PROJECT'] = {
+  json: (): string => projectJson(),
+  apply: (text: string): string => {
+    try {
+      return applyProject(JSON.parse(text));
+    } catch (e) {
+      return `error: ${(e as Error).message}`;
+    }
+  },
 };

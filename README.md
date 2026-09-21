@@ -40,6 +40,9 @@ npm start            # http://localhost:8123
    - `＋Action` / `＋Motion` / `＋空节点` 创建的节点分别带 `Action_W03` / `LinkMotion_W03` 流程（与 XFsm 一致）。
 6. **保存**：`保存`/`另存为` 写回 `.fsm`（游戏可直接加载的二进制）；`导出 XML` 生成与 XFsm 导出同构的 XML。
    没有句柄时退化为浏览器下载。
+   **项目文件**：`保存项目`（Ctrl+Shift+S）把节点位置、视图与"边在顶层"开关存成 `<名字>.fsmp.json`；
+   重新打开 FSM 后用 `打开项目` 恢复布局，也可以直接把项目文件拖进窗口。
+   项目与 FSM 分开保存——游戏只吃 `.fsm`，布局留在项目里。
 7. 部署与以前一样：拷到 `nativePC/hm/wp/wp03/wp03_action.fsm`（或用现有 deploy 脚本）。
 
 ## 验证情况
