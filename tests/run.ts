@@ -190,6 +190,17 @@ console.log('== editing operations ==');
   check('edit: action/motion survive round-trip',
     rt.nodeActionNo(rtAn) === 0 && rt.nodeMotionNo(rtMn)?.motion === 0);
   check('edit: validates clean after node creation', rt.validate().length === 0, rt.validate().join('; '));
+
+  // node color: the editor paints the .fsm's own mColorType field, so colors
+  // persist to disk with the regular FSM save (no separate color store)
+  const m5 = FsmModel.fromBinary(fs.readFileSync(DEPLOYED), 'w5.fsm');
+  const id5 = m5.getNum(m5.nodes()[4], 'mId');
+  m5.snapshot();
+  m5.setField(m5.nodes()[4], 'mColorType', 6);
+  const rt5 = FsmModel.fromBinary(m5.toBinary(), 'rt5.fsm');
+  const rt5nd = rt5.nodes().find((nd) => rt5.getNum(nd, 'mId') === id5)!;
+  check('color: painted mColorType survives round-trip', rt5.getNum(rt5nd, 'mColorType') === 6,
+    String(rt5.getNum(rt5nd, 'mColorType')));
 }
 
 console.log('== link reorder (priority order) ==');

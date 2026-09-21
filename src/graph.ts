@@ -24,6 +24,9 @@ export interface GraphCallbacks {
     kind: 'canvas' | 'node' | 'link';
     nodeId?: number;
     linkIndex?: number;
+    /** set when the right-click landed inside an active band selection:
+     *  the menu should act on every id here, not just nodeId */
+    multiIds?: number[];
     screen: Point;
     world: Point;
   }): void;
@@ -31,7 +34,10 @@ export interface GraphCallbacks {
 
 
 
-const COLOR_PALETTE = ['#8a8f98', '#4f8ef7', '#e05555', '#e8c33a', '#54c46a', '#a86ee0', '#38c7d8', '#e08a3a'];
+/** card header colors, indexed by mColorType % length (the .fsm's own
+ *  node-color field, so painted colors persist inside the saved .fsm) */
+export const COLOR_PALETTE = ['#8a8f98', '#4f8ef7', '#e05555', '#e8c33a', '#54c46a', '#a86ee0', '#38c7d8', '#e08a3a'];
+export const COLOR_NAMES = ['灰', '蓝', '红', '黄', '绿', '紫', '青', '橙'];
 
 export class GraphView {
   svg: SVGSVGElement;
@@ -68,7 +74,11 @@ export class GraphView {
       `<marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">` +
       `<path d="M 0 0 L 10 5 L 0 10 z" fill="#9aa4b2"/></marker>` +
       `<marker id="arrowSel" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">` +
-      `<path d="M 0 0 L 10 5 L 0 10 z" fill="#ff5252"/></marker>`;
+      `<path d="M 0 0 L 10 5 L 0 10 z" fill="#ff5252"/></marker>` +
+      `<marker id="arrowIn" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">` +
+      `<path d="M 0 0 L 10 5 L 0 10 z" fill="#ff5252"/></marker>` +
+      `<marker id="arrowOut" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">` +
+      `<path d="M 0 0 L 10 5 L 0 10 z" fill="#54c46a"/></marker>`;
     svg.appendChild(defs);
     this.world = document.createElementNS(ns, 'g');
     this.edgeLayer = document.createElementNS(ns, 'g');
@@ -96,9 +106,14 @@ export class GraphView {
         this.cb.onContextMenu({ kind: 'link', nodeId: nid, linkIndex: li, screen, world });
       } else if (nodeG) {
         const nid = Number(nodeG.dataset['nodeId']);
-        this.selectNode(nid);
-        this.cb.onSelectNode(nid);
-        this.cb.onContextMenu({ kind: 'node', nodeId: nid, screen, world });
+        if (this.selectedIds.has(nid) && this.selectedIds.size > 1) {
+          // right-click inside a band selection: keep it, the menu acts on all
+          this.cb.onContextMenu({ kind: 'node', nodeId: nid, multiIds: [...this.selectedIds], screen, world });
+        } else {
+          this.selectNode(nid);
+          this.cb.onSelectNode(nid);
+          this.cb.onContextMenu({ kind: 'node', nodeId: nid, screen, world });
+        }
       } else {
         this.cb.onContextMenu({ kind: 'canvas', screen, world });
       }
@@ -443,6 +458,7 @@ export class GraphView {
   }
   selectLink(nodeId: number, linkIndex: number): void {
     this.selectedLink = { nodeId, linkIndex };
+    this.selectedNodeId = null; // link selection replaces any node highlight
     this.selectedIds = new Set([nodeId]);
     this.render();
   }
@@ -661,7 +677,10 @@ export class GraphView {
         const dst = model.getNum(lk, 'mDestinationNodeId');
         const b = this.nodePos(dst), sb = cards.get(dst);
         const isSel = this.selectedLink?.nodeId === id && this.selectedLink?.linkIndex === idx;
-        const incident = this.selectedNodeId === id || this.selectedNodeId === dst;
+        // directional highlight around the selection: out-edges green,
+        // in-edges red (an edge between two selected nodes reads as out-flow)
+        const inSel = !isSel && this.selectedIds.has(dst);
+        const outSel = !isSel && !inSel && this.selectedIds.has(id);
         const path = document.createElementNS(ns, 'path');
         path.dataset['edge'] = `${id},${idx}`;
         // start: right edge of the source's out-row
@@ -684,10 +703,10 @@ export class GraphView {
         }
         path.setAttribute('d', d);
         path.setAttribute('fill', 'none');
-        path.setAttribute('stroke', isSel ? '#ff5252' : incident ? '#c98a8a' : '#8b95a3');
-        path.setAttribute('stroke-opacity', incident ? '0.95' : this.edgesOnTop ? '0.5' : '0.42');
-        path.setAttribute('stroke-width', isSel ? '2.4' : '1.3');
-        path.setAttribute('marker-end', isSel ? 'url(#arrowSel)' : 'url(#arrow)');
+        path.setAttribute('stroke', isSel ? '#ff5252' : inSel ? '#ff5252' : outSel ? '#54c46a' : '#8b95a3');
+        path.setAttribute('stroke-opacity', isSel || inSel || outSel ? '0.95' : this.edgesOnTop ? '0.5' : '0.42');
+        path.setAttribute('stroke-width', isSel ? '2.4' : inSel || outSel ? '1.9' : '1.3');
+        path.setAttribute('marker-end', isSel ? 'url(#arrowSel)' : inSel ? 'url(#arrowIn)' : outSel ? 'url(#arrowOut)' : 'url(#arrow)');
         this.edgeLayer.appendChild(path);
       });
     }

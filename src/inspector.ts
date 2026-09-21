@@ -2,6 +2,7 @@
 // Every mutating control snapshots the model first (undo granularity).
 import { FsmModel, Selection } from './model';
 import { XfsInstance, isInstance } from './xfs';
+import { COLOR_PALETTE, COLOR_NAMES } from './graph';
 
 export interface InspectorHost {
   model: FsmModel | null;
@@ -121,6 +122,22 @@ function button(r: HTMLDivElement | HTMLElement, label: string, onClick: (e: Eve
   return b;
 }
 
+/** clickable header-color palette (writes mColorType, saved inside the .fsm) */
+function colorPalette(current: number, onPick: (idx: number) => void): HTMLDivElement {
+  const pal = document.createElement('div');
+  pal.className = 'colorPalette';
+  COLOR_PALETTE.forEach((c, i) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'swatch' + (i === current ? ' cur' : '');
+    b.style.background = c;
+    b.title = `${COLOR_NAMES[i]}（mColorType=${i}）`;
+    b.addEventListener('click', () => onPick(i));
+    pal.appendChild(b);
+  });
+  return pal;
+}
+
 // ----- root -----
 
 function renderRootHint(m: FsmModel, root: HTMLElement): void {
@@ -174,6 +191,16 @@ function renderMulti(m: FsmModel, host: InspectorHost, root: HTMLElement, nodeId
     `<p>在画布上拖动任一选中卡片即可<b>整体移动</b>；按 Delete 删除全部选中节点。</p>` +
     `<p class="dim">${rows}</p>`;
   box.appendChild(info);
+  // batch-paint the whole selection: one color per series of moves
+  const cr = row(box, '统一颜色');
+  cr.appendChild(colorPalette(-1, (i) => {
+    m.snapshot();
+    for (const id of nodeIds) {
+      const nd = m.nodeById(id);
+      if (nd) m.setField(nd, 'mColorType', i);
+    }
+    host.requestRender();
+  }));
   button(box, '删除所选节点', () => {
     if (!confirm(`删除选中的 ${nodeIds.length} 个节点？指向它们的链接也会一并删除。`)) return;
     m.snapshot();
@@ -206,6 +233,13 @@ function renderNode(m: FsmModel, host: InspectorHost, root: HTMLElement, nodeId:
   ro.textContent = String(m.getNum(node, 'mUniqueId'));
   ro.className = 'dim';
   r.appendChild(ro);
+
+  r = row(title, '颜色');
+  r.appendChild(colorPalette(m.getNum(node, 'mColorType') % COLOR_PALETTE.length, (i) => {
+    m.snapshot();
+    m.setField(node, 'mColorType', i);
+    host.requestRender();
+  }));
 
   r = row(title, 'mColorType');
   numInput(r, m.getNum(node, 'mColorType'), (v) => { m.snapshot(); m.setField(node, 'mColorType', v); host.requestRender(); });

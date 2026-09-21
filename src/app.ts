@@ -1,6 +1,6 @@
 // Application shell: file I/O, toolbar, sidebar, wiring graph + inspector.
 import { FsmModel, Selection } from './model';
-import { GraphView, ProjectLayout } from './graph';
+import { GraphView, ProjectLayout, COLOR_PALETTE, COLOR_NAMES } from './graph';
 import { renderInspector as paintInspector } from './inspector';
 
 let model: FsmModel | null = null;
@@ -21,6 +21,8 @@ function btn(id: string): HTMLButtonElement { return document.getElementById(id)
 interface CtxMenuItem {
   label: string;
   danger?: boolean;
+  /** optional colored dot in front of the label (color-palette entries) */
+  swatch?: string;
   action?: () => void;
   children?: CtxMenuItem[];
 }
@@ -41,7 +43,15 @@ function buildMenuDom(items: CtxMenuItem[]): HTMLElement {
     }
     const row = document.createElement('div');
     row.className = 'ctxItem' + (item.danger ? ' danger' : '') + (item.children ? ' hasSub' : '');
-    row.textContent = item.label;
+    if (item.swatch) {
+      const dot = document.createElement('span');
+      dot.className = 'dot';
+      dot.style.background = item.swatch;
+      row.appendChild(dot);
+    }
+    const labelSpan = document.createElement('span');
+    labelSpan.textContent = item.label;
+    row.appendChild(labelSpan);
     if (item.children) {
       const sub = buildMenuDom(item.children);
       row.appendChild(sub);
@@ -70,9 +80,31 @@ document.addEventListener('pointerdown', (e) => {
 }, true);
 window.addEventListener('blur', closeContextMenu);
 
-function nodeMenuItems(nodeId: number, world: { x: number; y: number }): CtxMenuItem[] {
+/** palette submenu; paints every id in `ids` — one mColorType per node, stored
+ *  in the .fsm itself so colors survive save/reopen (and XFsm) */
+function colorMenuItems(ids: number[]): CtxMenuItem[] {
+  return COLOR_PALETTE.map((c, i) => ({
+    label: `${COLOR_NAMES[i] ?? `类型 ${i}`} (${i})`,
+    swatch: c,
+    action: () => {
+      const m = model;
+      if (!m) return;
+      m.snapshot();
+      for (const id of ids) {
+        const nd = m.nodeById(id);
+        if (nd) m.setField(nd, 'mColorType', i);
+      }
+      renderAll();
+    },
+  }));
+}
+
+function nodeMenuItems(nodeId: number, world: { x: number; y: number }, multiIds?: number[]): CtxMenuItem[] {
   const m = model;
   if (!m) return [];
+  // right-click inside a band selection: act on the whole selection
+  const ids = multiIds && multiIds.length > 1 ? multiIds : [nodeId];
+  const multi = ids.length > 1;
   const targetItems = (): CtxMenuItem[] =>
     m.nodes().map((nd) => {
       const tid = m.getNum(nd, 'mId');
@@ -87,9 +119,10 @@ function nodeMenuItems(nodeId: number, world: { x: number; y: number }): CtxMenu
       };
     });
   return [
+    ...(multi ? [] : [{ label: '添加链接到…', children: targetItems() }]),
     {
-      label: '添加链接到…',
-      children: targetItems(),
+      label: multi ? `节点颜色（对选中的 ${ids.length} 个）` : '节点颜色',
+      children: colorMenuItems(ids),
     },
     { label: '---' },
     {
@@ -106,13 +139,16 @@ function nodeMenuItems(nodeId: number, world: { x: number; y: number }): CtxMenu
     },
     { label: '---' },
     {
-      label: '删除此节点',
+      label: multi ? `删除选中的 ${ids.length} 个节点` : '删除此节点',
       danger: true,
       action: () => {
-        if (!confirm(`删除节点 ${nodeId}？指向它的链接也会一并删除。`)) return;
+        if (!confirm(multi
+          ? `删除选中的 ${ids.length} 个节点？指向它们的链接也会一并删除。`
+          : `删除节点 ${nodeId}？指向它的链接也会一并删除。`)) return;
         m.snapshot();
-        m.deleteNode(nodeId);
+        for (const id of ids) m.deleteNode(id);
         selection = { kind: 'none' };
+        graph.clearSelection();
         renderAll();
       },
     },
@@ -251,7 +287,7 @@ const graph = new GraphView($('canvas') as unknown as SVGSVGElement, {
   onContextMenu(ctx) {
     if (!model) return;
     if (ctx.kind === 'node' && ctx.nodeId !== undefined) {
-      openContextMenu(nodeMenuItems(ctx.nodeId, ctx.world), ctx.screen.x, ctx.screen.y);
+      openContextMenu(nodeMenuItems(ctx.nodeId, ctx.world, ctx.multiIds), ctx.screen.x, ctx.screen.y);
     } else if (ctx.kind === 'link' && ctx.nodeId !== undefined && ctx.linkIndex !== undefined) {
       const link = model.linksOf(model.nodeById(ctx.nodeId)!)[ctx.linkIndex];
       const hasCond = link ? model.getNum(link, 'mExistCondition') === 1 : false;

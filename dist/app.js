@@ -1340,6 +1340,7 @@
 
   // src/graph.ts
   var COLOR_PALETTE = ["#8a8f98", "#4f8ef7", "#e05555", "#e8c33a", "#54c46a", "#a86ee0", "#38c7d8", "#e08a3a"];
+  var COLOR_NAMES = ["灰", "蓝", "红", "黄", "绿", "紫", "青", "橙"];
   var GraphView = class {
     constructor(svg, cb) {
       this.model = null;
@@ -1362,7 +1363,7 @@
       this.cb = cb;
       const ns = "http://www.w3.org/2000/svg";
       const defs = document.createElementNS(ns, "defs");
-      defs.innerHTML = `<marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#9aa4b2"/></marker><marker id="arrowSel" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#ff5252"/></marker>`;
+      defs.innerHTML = `<marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#9aa4b2"/></marker><marker id="arrowSel" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#ff5252"/></marker><marker id="arrowIn" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#ff5252"/></marker><marker id="arrowOut" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#54c46a"/></marker>`;
       svg.appendChild(defs);
       this.world = document.createElementNS(ns, "g");
       this.edgeLayer = document.createElementNS(ns, "g");
@@ -1389,9 +1390,13 @@
           this.cb.onContextMenu({ kind: "link", nodeId: nid, linkIndex: li, screen, world });
         } else if (nodeG) {
           const nid = Number(nodeG.dataset["nodeId"]);
-          this.selectNode(nid);
-          this.cb.onSelectNode(nid);
-          this.cb.onContextMenu({ kind: "node", nodeId: nid, screen, world });
+          if (this.selectedIds.has(nid) && this.selectedIds.size > 1) {
+            this.cb.onContextMenu({ kind: "node", nodeId: nid, multiIds: [...this.selectedIds], screen, world });
+          } else {
+            this.selectNode(nid);
+            this.cb.onSelectNode(nid);
+            this.cb.onContextMenu({ kind: "node", nodeId: nid, screen, world });
+          }
         } else {
           this.cb.onContextMenu({ kind: "canvas", screen, world });
         }
@@ -1715,6 +1720,7 @@
     }
     selectLink(nodeId, linkIndex) {
       this.selectedLink = { nodeId, linkIndex };
+      this.selectedNodeId = null;
       this.selectedIds = /* @__PURE__ */ new Set([nodeId]);
       this.render();
     }
@@ -1922,7 +1928,8 @@
           const dst = model2.getNum(lk, "mDestinationNodeId");
           const b = this.nodePos(dst), sb = cards.get(dst);
           const isSel = this.selectedLink?.nodeId === id && this.selectedLink?.linkIndex === idx;
-          const incident = this.selectedNodeId === id || this.selectedNodeId === dst;
+          const inSel = !isSel && this.selectedIds.has(dst);
+          const outSel = !isSel && !inSel && this.selectedIds.has(id);
           const path = document.createElementNS(ns, "path");
           path.dataset["edge"] = `${id},${idx}`;
           const sx = a.x + sa.w;
@@ -1943,10 +1950,10 @@
           }
           path.setAttribute("d", d);
           path.setAttribute("fill", "none");
-          path.setAttribute("stroke", isSel ? "#ff5252" : incident ? "#c98a8a" : "#8b95a3");
-          path.setAttribute("stroke-opacity", incident ? "0.95" : this.edgesOnTop ? "0.5" : "0.42");
-          path.setAttribute("stroke-width", isSel ? "2.4" : "1.3");
-          path.setAttribute("marker-end", isSel ? "url(#arrowSel)" : "url(#arrow)");
+          path.setAttribute("stroke", isSel ? "#ff5252" : inSel ? "#ff5252" : outSel ? "#54c46a" : "#8b95a3");
+          path.setAttribute("stroke-opacity", isSel || inSel || outSel ? "0.95" : this.edgesOnTop ? "0.5" : "0.42");
+          path.setAttribute("stroke-width", isSel ? "2.4" : inSel || outSel ? "1.9" : "1.3");
+          path.setAttribute("marker-end", isSel ? "url(#arrowSel)" : inSel ? "url(#arrowIn)" : outSel ? "url(#arrowOut)" : "url(#arrow)");
           this.edgeLayer.appendChild(path);
         });
       }
@@ -2306,6 +2313,20 @@
     r.appendChild(b);
     return b;
   }
+  function colorPalette(current, onPick) {
+    const pal = document.createElement("div");
+    pal.className = "colorPalette";
+    COLOR_PALETTE.forEach((c, i) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "swatch" + (i === current ? " cur" : "");
+      b.style.background = c;
+      b.title = `${COLOR_NAMES[i]}（mColorType=${i}）`;
+      b.addEventListener("click", () => onPick(i));
+      pal.appendChild(b);
+    });
+    return pal;
+  }
   function renderRootHint(m2, root) {
     const box = section(root, `FSM 总览 — ${m2.doc.rootName}`);
     const info = document.createElement("div");
@@ -2361,6 +2382,15 @@
     }).join("");
     info.innerHTML = `<p>在画布上拖动任一选中卡片即可<b>整体移动</b>；按 Delete 删除全部选中节点。</p><p class="dim">${rows}</p>`;
     box.appendChild(info);
+    const cr = row(box, "统一颜色");
+    cr.appendChild(colorPalette(-1, (i) => {
+      m2.snapshot();
+      for (const id of nodeIds) {
+        const nd = m2.nodeById(id);
+        if (nd) m2.setField(nd, "mColorType", i);
+      }
+      host.requestRender();
+    }));
     button(box, "删除所选节点", () => {
       if (!confirm(`删除选中的 ${nodeIds.length} 个节点？指向它们的链接也会一并删除。`)) return;
       m2.snapshot();
@@ -2405,6 +2435,12 @@
     ro.textContent = String(m2.getNum(node, "mUniqueId"));
     ro.className = "dim";
     r.appendChild(ro);
+    r = row(title, "颜色");
+    r.appendChild(colorPalette(m2.getNum(node, "mColorType") % COLOR_PALETTE.length, (i) => {
+      m2.snapshot();
+      m2.setField(node, "mColorType", i);
+      host.requestRender();
+    }));
     r = row(title, "mColorType");
     numInput(r, m2.getNum(node, "mColorType"), (v) => {
       m2.snapshot();
@@ -2921,7 +2957,15 @@
       }
       const row2 = document.createElement("div");
       row2.className = "ctxItem" + (item.danger ? " danger" : "") + (item.children ? " hasSub" : "");
-      row2.textContent = item.label;
+      if (item.swatch) {
+        const dot = document.createElement("span");
+        dot.className = "dot";
+        dot.style.background = item.swatch;
+        row2.appendChild(dot);
+      }
+      const labelSpan = document.createElement("span");
+      labelSpan.textContent = item.label;
+      row2.appendChild(labelSpan);
       if (item.children) {
         const sub = buildMenuDom(item.children);
         row2.appendChild(sub);
@@ -2951,9 +2995,27 @@
     if (!t.closest(".ctxMenu")) closeContextMenu();
   }, true);
   window.addEventListener("blur", closeContextMenu);
-  function nodeMenuItems(nodeId, world) {
+  function colorMenuItems(ids) {
+    return COLOR_PALETTE.map((c, i) => ({
+      label: `${COLOR_NAMES[i] ?? `类型 ${i}`} (${i})`,
+      swatch: c,
+      action: () => {
+        const m2 = model;
+        if (!m2) return;
+        m2.snapshot();
+        for (const id of ids) {
+          const nd = m2.nodeById(id);
+          if (nd) m2.setField(nd, "mColorType", i);
+        }
+        renderAll();
+      }
+    }));
+  }
+  function nodeMenuItems(nodeId, world, multiIds) {
     const m2 = model;
     if (!m2) return [];
+    const ids = multiIds && multiIds.length > 1 ? multiIds : [nodeId];
+    const multi = ids.length > 1;
     const targetItems = () => m2.nodes().map((nd) => {
       const tid = m2.getNum(nd, "mId");
       return {
@@ -2967,9 +3029,10 @@
       };
     });
     return [
+      ...multi ? [] : [{ label: "添加链接到…", children: targetItems() }],
       {
-        label: "添加链接到…",
-        children: targetItems()
+        label: multi ? `节点颜色（对选中的 ${ids.length} 个）` : "节点颜色",
+        children: colorMenuItems(ids)
       },
       { label: "---" },
       {
@@ -2986,13 +3049,14 @@
       },
       { label: "---" },
       {
-        label: "删除此节点",
+        label: multi ? `删除选中的 ${ids.length} 个节点` : "删除此节点",
         danger: true,
         action: () => {
-          if (!confirm(`删除节点 ${nodeId}？指向它的链接也会一并删除。`)) return;
+          if (!confirm(multi ? `删除选中的 ${ids.length} 个节点？指向它们的链接也会一并删除。` : `删除节点 ${nodeId}？指向它的链接也会一并删除。`)) return;
           m2.snapshot();
-          m2.deleteNode(nodeId);
+          for (const id of ids) m2.deleteNode(id);
           selection = { kind: "none" };
+          graph.clearSelection();
           renderAll();
         }
       }
@@ -3125,7 +3189,7 @@
     onContextMenu(ctx) {
       if (!model) return;
       if (ctx.kind === "node" && ctx.nodeId !== void 0) {
-        openContextMenu(nodeMenuItems(ctx.nodeId, ctx.world), ctx.screen.x, ctx.screen.y);
+        openContextMenu(nodeMenuItems(ctx.nodeId, ctx.world, ctx.multiIds), ctx.screen.x, ctx.screen.y);
       } else if (ctx.kind === "link" && ctx.nodeId !== void 0 && ctx.linkIndex !== void 0) {
         const link = model.linksOf(model.nodeById(ctx.nodeId))[ctx.linkIndex];
         const hasCond = link ? model.getNum(link, "mExistCondition") === 1 : false;

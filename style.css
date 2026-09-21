@@ -10,7 +10,13 @@
   --ok: #54c46a;
 }
 * { box-sizing: border-box; }
-html, body { height: 100%; margin: 0; }
+/* the canvas is a gesture surface: left-drag must pan/select, never select
+   text. Form fields opt back in so values stay editable/copyable. */
+html, body {
+  height: 100%; margin: 0;
+  user-select: none; -webkit-user-select: none;
+}
+input, textarea { user-select: text; -webkit-user-select: text; }
 body {
   display: flex; flex-direction: column;
   background: var(--bg); color: var(--text);
@@ -94,6 +100,10 @@ main { flex: 1 1 auto; display: flex; min-height: 0; }
 .ctxItem.danger { color: var(--danger); }
 .ctxItem.danger:hover { background: #3a2626; }
 .ctxItem.hasSub::after { content: '▸'; margin-left: 14px; color: var(--dim); }
+.ctxItem .dot {
+  display: inline-block; width: 11px; height: 11px; flex: 0 0 auto;
+  border-radius: 3px; margin-right: 8px; border: 1px solid rgba(255,255,255,.25);
+}
 .ctxItem .ctxMenu { display: none; position: absolute; left: 100%; top: -4px; margin-left: 2px; }
 .ctxItem:hover > .ctxMenu { display: block; }
 .ctxSep { height: 1px; background: var(--border); margin: 4px 6px; }
@@ -181,6 +191,14 @@ g:hover > .nodeCard { stroke: var(--dim); }
 .row { display: flex; align-items: center; gap: 8px; margin: 5px 0; }
 .row > label { flex: 0 0 128px; color: var(--dim); }
 .row input[type="text"], .row input[type="number"], .row select { flex: 1; min-width: 0; }
+/* header-color palette (inspector) */
+.colorPalette { display: flex; gap: 5px; flex: 1; align-items: center; }
+.swatch {
+  width: 22px; height: 22px; padding: 0; border-radius: 5px;
+  border: 2px solid transparent; flex: 0 0 auto;
+}
+.swatch:hover { border-color: rgba(255, 255, 255, .7); }
+.swatch.cur { border-color: var(--text); box-shadow: 0 0 0 1px var(--bg3); }
 .linkItem {
   display: flex; gap: 4px; align-items: center; flex-wrap: wrap;
   padding: 5px; margin: 4px 0; background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
