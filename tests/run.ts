@@ -1,7 +1,7 @@
 // Node test runner: byte-level round-trip verification against real samples.
 // Run via `npm test` (esbuild bundle -> node).
 import * as fs from 'fs';
-import { parseXfs, writeXfs, XfsDoc, XfsInstance } from '../src/xfs';
+import { parseXfs, writeXfs, XfsDoc, XfsInstance, isInstance } from '../src/xfs';
 import { parseMtXml, writeMtXml } from '../src/fsmxml';
 import { FsmModel } from '../src/model';
 
@@ -119,6 +119,29 @@ console.log('== editing operations ==');
 {
   const m = FsmModel.fromBinary(fs.readFileSync(DEPLOYED), 'wp03_action.fsm');
   check('edit: pristine validates clean', m.validate().length === 0, m.validate().join('; '));
+
+  // single-child condition trees are stored unboxed (not as an array);
+  // summaries must read them through memberList() or call them "empty"
+  check('summary: single-variable condition renders',
+    m.conditionSummary(m.conditions()[0]) === '#0: △', m.conditionSummary(m.conditions()[0]));
+  const findRoot = (op: number) => m.conditions().find((c) => {
+    const r = c.__vals__['mpRootNode'];
+    return isInstance(r) && m.getNum(r, 'mOperator') === op;
+  });
+  const orCond = findRoot(17);
+  const andCond = findRoot(16);
+  check('summary: OR group uses |', !!orCond && m.conditionSummary(orCond).includes(' | '), orCond && m.conditionSummary(orCond));
+  check('summary: AND group uses &', !!andCond && m.conditionSummary(andCond).includes(' & '), andCond && m.conditionSummary(andCond));
+  // "(空条件)" may only appear for a genuinely empty tree: a childless
+  // operator-0 (直通) root node — an always-true passthrough condition
+  const genuinelyEmpty = m.conditions().filter((c) => {
+    const r = c.__vals__['mpRootNode'];
+    return isInstance(r) && m.defName(r.__class__).endsWith('OperationNode')
+      && m.getNum(r, 'mOperator') === 0 && m.memberList(r, 'mpChildList').length === 0;
+  }).length;
+  const labeledEmpty = m.conditions().filter((c) => m.conditionSummary(c).includes('(空条件)')).length;
+  check('summary: "empty" only for passthrough conditions', labeledEmpty === genuinelyEmpty,
+    `${labeledEmpty} labeled vs ${genuinelyEmpty} truly empty`);
 
   m.snapshot();
   const cond = m.addCondition();

@@ -23,7 +23,7 @@ createServer(async (req, res) => {
     const file = normalize(join(root, path));
     if (!file.startsWith(root)) { res.writeHead(403); res.end(); return; }
     const data = await readFile(file);
-    res.writeHead(200, { 'Content-Type': MIME[extname(file)] ?? 'application/octet-stream', 'Cache-Control': 'no-cache' });
+    res.writeHead(200, { 'Content-Type': MIME[extname(file)] ?? 'application/octet-stream', 'Cache-Control': 'no-store' });
     res.end(data);
   } catch {
     res.writeHead(404);

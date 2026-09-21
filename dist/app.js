@@ -834,6 +834,18 @@
   };
 
   // src/model.ts
+  var COND_OP_SYMBOLS = {
+    1: "IsTrue",
+    2: "IsFalse",
+    3: "==",
+    4: "!=",
+    5: "<",
+    6: "<=",
+    7: ">",
+    8: ">=",
+    9: "&",
+    10: "|"
+  };
   var FsmModel = class _FsmModel {
     constructor(doc) {
       this.format = "binary";
@@ -1205,51 +1217,45 @@
     }
     // ----- condition summary / references ----------------------------------------
     conditionSummary(tree) {
-      const parts = [];
       const nameObj = tree.__vals__["mName"];
       let idStr = "?";
       if (isInstance(nameObj)) idStr = String(nameObj.__vals__["mId"] ?? "?");
-      const collect = (v, depth) => {
-        if (depth > 8 || !isInstance(v)) return;
-        const defName = this.defName(v.__class__);
-        if (defName.endsWith("OperationNode")) {
-          const kids = v.__vals__["mpChildList"];
-          if (Array.isArray(kids)) kids.forEach((k) => collect(k, depth + 1));
-        } else if (defName.endsWith("VariableNode")) {
-          const vi = v.__vals__["mVariable"];
-          if (isInstance(vi)) {
-            const p = this.str(vi, "mPropertyName");
-            if (p) parts.push(p);
-          }
-          const kids = v.__vals__["mpChildList"];
-          if (Array.isArray(kids)) kids.forEach((k) => collect(k, depth + 1));
-        }
-      };
       const root = tree.__vals__["mpRootNode"];
-      if (isInstance(root)) collect(root, 0);
-      return `#${idStr}: ${parts.join(" & ") || "(空条件)"}`;
+      const expr = isInstance(root) ? this.conditionExpr(root, 0, false) : "";
+      return `#${idStr}: ${expr || "(空条件)"}`;
+    }
+    /** one-line rendering of a condition-tree node. Reads child lists through
+     *  memberList(): the file stores a single child unboxed, and a raw
+     *  Array.isArray check would call every single-variable condition empty. */
+    conditionExpr(node, depth, markUnfilled) {
+      if (depth > 8) return "";
+      const defName = this.defName(node.__class__);
+      const kids = () => this.memberList(node, "mpChildList").map((k) => this.conditionExpr(k, depth + 1, markUnfilled)).filter((s) => s !== "");
+      if (defName.endsWith("OperationNode")) {
+        const parts = kids();
+        const op = this.getNum(node, "mOperator");
+        if (op === 16) return parts.join(" & ");
+        if (op === 17) return parts.join(" | ");
+        const label = COND_OP_SYMBOLS[op];
+        if (label && parts.length === 2) return `${parts[0]} ${label} ${parts[1]}`;
+        if (label && parts.length === 1) return `${label} ${parts[0]}`;
+        return parts.join(" & ");
+      }
+      if (defName.endsWith("VariableNode")) {
+        const parts = [];
+        const vi = node.__vals__["mVariable"];
+        if (isInstance(vi)) {
+          const p = this.str(vi, "mPropertyName");
+          if (p) parts.push(p);
+          else if (markUnfilled) parts.push("(未填属性)");
+        }
+        return [...parts, ...kids()].join(" & ");
+      }
+      return "";
     }
     /** summary for an arbitrary condition-tree node (nested groups etc.) */
     conditionSummaryOf(node) {
-      const parts = [];
-      const collect = (v, depth) => {
-        if (depth > 8 || !isInstance(v)) return;
-        const defName = this.defName(v.__class__);
-        if (defName.endsWith("OperationNode")) {
-          const kids = v.__vals__["mpChildList"];
-          if (Array.isArray(kids)) kids.forEach((k) => collect(k, depth + 1));
-        } else if (defName.endsWith("VariableNode")) {
-          const vi = v.__vals__["mVariable"];
-          if (isInstance(vi)) {
-            const p = this.str(vi, "mPropertyName");
-            parts.push(p || "(未填属性)");
-          }
-          const kids = v.__vals__["mpChildList"];
-          if (Array.isArray(kids)) kids.forEach((k) => collect(k, depth + 1));
-        }
-      };
-      collect(node, 0);
-      return parts.join(" & ") || "(空)";
+      return this.conditionExpr(node, 0, true) || "(空)";
     }
     conditionUsage(condIndex) {
       let count = 0;
