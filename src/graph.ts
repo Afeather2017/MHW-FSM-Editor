@@ -9,6 +9,10 @@ export interface GraphCallbacks {
   onSelectLink(nodeId: number, linkIndex: number): void;
   onCreateNodeAt(world: Point): void;
   onSelectionCleared(): void;
+  /** rubber-band / ctrl-click changed the multi-selection (empty = cleared) */
+  onMultiSelect(ids: number[]): void;
+  /** reorder an out-link by ±1 — link order is the game's condition priority */
+  onReorderLink(nodeId: number, linkIndex: number, dir: -1 | 1): void;
   onContextMenu(ctx: {
     kind: 'canvas' | 'node' | 'link';
     nodeId?: number;
@@ -35,10 +39,18 @@ export class GraphView {
   highlightIds = new Set<number>();
   selectedNodeId: number | null = null;
   selectedLink: { nodeId: number; linkIndex: number } | null = null;
+  /** multi-selection (band select / ctrl-click); includes selectedNodeId */
+  selectedIds = new Set<number>();
 
   private drag: { kind: 'pan'; sx: number; sy: number; ox: number; oy: number } |
-    { kind: 'node'; nodeId: number; dx: number; dy: number; moved: boolean; pendingLink?: { nodeId: number; linkIndex: number } } | null = null;
+    { kind: 'node'; nodeId: number; dx: number; dy: number; orig: Point; moved: boolean; pendingLink?: { nodeId: number; linkIndex: number }; group?: Map<number, Point> } |
+    { kind: 'band'; start: Point; cur: Point; moved: boolean } | null = null;
   private lastMouse: Point = { x: 0, y: 0 };
+  private bandRect: SVGRectElement | null = null;
+  /** last rendered card sizes, for band hit-testing without re-measuring */
+  private cardMetrics = new Map<number, CardMetrics>();
+  /** the reorder-handle row the pointer is over (revealed above the edges) */
+  private hoverReveal: { nodeId: number; linkIndex: number } | null = null;
 
   constructor(svg: SVGSVGElement, cb: GraphCallbacks) {
     this.svg = svg;
@@ -57,6 +69,10 @@ export class GraphView {
     this.world.appendChild(this.nodeLayer);
     this.world.appendChild(this.edgeLayer); // edges above cards by default
     svg.appendChild(this.world);
+    this.bandRect = document.createElementNS(ns, 'rect');
+    this.bandRect.setAttribute('class', 'bandRect');
+    this.bandRect.setAttribute('visibility', 'hidden');
+    this.world.appendChild(this.bandRect);
 
     svg.addEventListener('wheel', (e) => this.onWheel(e), { passive: false });
     svg.addEventListener('contextmenu', (e) => {
@@ -97,6 +113,7 @@ export class GraphView {
     const world = this.world;
     if (v) { this.world.appendChild(this.nodeLayer); this.world.appendChild(this.edgeLayer); }
     else { this.world.appendChild(this.edgeLayer); this.world.appendChild(this.nodeLayer); }
+    if (this.bandRect) this.world.appendChild(this.bandRect); // band stays on top
     document.dispatchEvent(new CustomEvent('fsmstudio:edgez', { detail: v }));
   }
 
@@ -105,6 +122,7 @@ export class GraphView {
     this.positions.clear();
     this.selectedNodeId = null;
     this.selectedLink = null;
+    this.selectedIds.clear();
     this.restorePositions();
   }
 
@@ -174,43 +192,166 @@ export class GraphView {
     }
     if (e.button !== 0) return;
     const target = e.target as Element;
-    // link rows on cards: click = select the link, drag = move the card
+    const p = this.screenToWorld(e.clientX, e.clientY);
+    // reorder handles sit right of the card where the out-edges start, so
+    // edge paths often cover them — hit-test by geometry, not by DOM stacking
+    if (this.hoverReveal) {
+      const h = this.hitReorderHandle(p);
+      if (h && h.nodeId === this.hoverReveal.nodeId && h.linkIndex === this.hoverReveal.linkIndex) {
+        this.hoverReveal = null;
+        this.svg.querySelectorAll('g[data-reorder].show').forEach((el) => el.classList.remove('show'));
+        this.cb.onReorderLink(h.nodeId, h.linkIndex, h.dir);
+        return;
+      }
+    }
+    this.hoverReveal = null;
+    this.svg.querySelectorAll('g[data-reorder].show').forEach((el) => el.classList.remove('show'));
+    // little ↑/↓ handles on out-link rows: reorder, don't drag/select
+    const reorder = target.closest('[data-reorder]') as SVGGElement | null;
+    if (reorder) {
+      const [nid, li] = (reorder.dataset['reorder'] ?? '').split(',').map(Number);
+      const dir = Number(reorder.dataset['dir']) as -1 | 1;
+      this.cb.onReorderLink(nid, li, dir);
+      return;
+    }
+    // link rows on cards: click = select the link, drag = move the card.
+    // rows are nested inside the card group, so the row match must win.
     const edge = target.closest('[data-edge]') as SVGPathElement | SVGGElement | null;
+    const nodeG = target.closest('[data-node-id]') as SVGGElement | null;
+
     if (edge) {
       const [nid, li] = (edge.dataset['edge'] ?? '').split(',').map(Number);
-      this.selectLink(nid, li);
-      const p = this.screenToWorld(e.clientX, e.clientY);
       const pos = this.positions.get(nid) ?? { x: 0, y: 0 };
+      // dragging a card that belongs to a multi-selection moves the group
+      if (this.selectedIds.has(nid) && this.selectedIds.size > 1) {
+        this.drag = { kind: 'node', nodeId: nid, dx: p.x - pos.x, dy: p.y - pos.y, orig: { ...pos }, moved: false, group: this.groupStart() };
+        return;
+      }
+      this.selectedIds.clear();
+      this.selectLink(nid, li);
       this.drag = {
-        kind: 'node', nodeId: nid, dx: p.x - pos.x, dy: p.y - pos.y, moved: false,
+        kind: 'node', nodeId: nid, dx: p.x - pos.x, dy: p.y - pos.y, orig: { ...pos }, moved: false,
         pendingLink: { nodeId: nid, linkIndex: li },
       };
       return;
     }
-    const nodeG = target.closest('[data-node-id]') as SVGGElement | null;
     if (nodeG) {
-      const nodeId = Number(nodeG.dataset['nodeId']);
-      const p = this.screenToWorld(e.clientX, e.clientY);
-      const pos = this.positions.get(nodeId) ?? { x: 0, y: 0 };
-      this.drag = { kind: 'node', nodeId, dx: p.x - pos.x, dy: p.y - pos.y, moved: false };
-      this.selectNode(nodeId);
+      const nid = Number(nodeG.dataset['nodeId']);
+      // ctrl/shift+click: toggle membership in the multi-selection
+      if (e.ctrlKey || e.metaKey || e.shiftKey) {
+        if (this.selectedIds.has(nid) && this.selectedIds.size > 1) this.selectedIds.delete(nid);
+        else this.selectedIds.add(nid);
+        this.selectedLink = null;
+        if (this.selectedIds.size === 1) {
+          const only = [...this.selectedIds][0];
+          this.selectedNodeId = only;
+          this.render();
+          this.cb.onSelectNode(only);
+        } else {
+          this.selectedNodeId = null;
+          this.render();
+          this.cb.onMultiSelect([...this.selectedIds]);
+        }
+        return;
+      }
+      const pos = this.positions.get(nid) ?? { x: 0, y: 0 };
+      if (this.selectedIds.has(nid) && this.selectedIds.size > 1) {
+        this.drag = { kind: 'node', nodeId: nid, dx: p.x - pos.x, dy: p.y - pos.y, orig: { ...pos }, moved: false, group: this.groupStart() };
+        return;
+      }
+      this.drag = { kind: 'node', nodeId: nid, dx: p.x - pos.x, dy: p.y - pos.y, orig: { ...pos }, moved: false };
+      this.selectNode(nid);
+      this.cb.onSelectNode(nid);
       return;
     }
     if (e.target === this.svg) {
-      if (this.selectedNodeId !== null || this.selectedLink !== null) {
-        this.selectedNodeId = null;
-        this.selectedLink = null;
-        this.cb.onSelectionCleared();
-      }
+      // background: clear selection, then a left-drag rubber-band selects
+      const hadSel = this.selectedNodeId !== null || this.selectedLink !== null || this.selectedIds.size > 0;
+      this.selectedNodeId = null;
+      this.selectedLink = null;
+      this.selectedIds.clear();
+      if (hadSel) this.cb.onSelectionCleared();
+      this.drag = { kind: 'band', start: p, cur: p, moved: false };
+      this.updateBandRect();
+    }
+  }
+
+  private groupStart(): Map<number, Point> {
+    const map = new Map<number, Point>();
+    for (const id of this.selectedIds) {
+      const pos = this.positions.get(id);
+      if (pos) map.set(id, { ...pos });
+    }
+    return map;
+  }
+
+  /** reorder-handle hit test in world coords: the ↑/↓ strip just right of a
+   *  card's out-link rows. Returns null outside any handle (incl. boundary
+   *  rows whose handle is hidden). */
+  private hitReorderHandle(w: Point): { nodeId: number; linkIndex: number; dir: -1 | 1 } | null {
+    if (!this.model) return null;
+    for (const nd of this.model.nodes()) {
+      const id = this.model.getNum(nd, 'mId');
+      const pos = this.positions.get(id);
+      const m = this.cardMetrics.get(id);
+      if (!pos || !m || m.outColW === 0) continue;
+      const dx = w.x - pos.x, dy = w.y - pos.y;
+      if (dx < m.w + 4 || dx > m.w + 32) continue;
+      const row = Math.floor((dy - 26) / 16);
+      if (row < 0 || dy > 26 + row * 16 + 14) continue;
+      const linkCount = this.model.linksOf(nd).length;
+      const dir: -1 | 1 = dx < m.w + 17 ? -1 : 1;
+      if (row >= linkCount) continue;
+      if (dir < 0 && row === 0) continue;
+      if (dir > 0 && row >= linkCount - 1) continue;
+      return { nodeId: id, linkIndex: row, dir };
+    }
+    return null;
+  }
+
+  /** reveal the reorder handles under the pointer even though edge paths
+   *  render above them (geometry-based, so z-order can't hide them) */
+  private updateHoverReveal(e: PointerEvent): void {
+    const t = e.target as Element | null;
+    let next: { nodeId: number; linkIndex: number } | null = null;
+    if (t && this.svg.contains(t) && !this.drag) {
+      const h = this.hitReorderHandle(this.screenToWorld(e.clientX, e.clientY));
+      if (h) next = { nodeId: h.nodeId, linkIndex: h.linkIndex };
+    }
+    if (this.hoverReveal?.nodeId === next?.nodeId && this.hoverReveal?.linkIndex === next?.linkIndex) return;
+    this.hoverReveal = next;
+    this.svg.querySelectorAll('g[data-reorder].show').forEach((el) => el.classList.remove('show'));
+    if (next) {
+      this.svg.querySelectorAll(`g[data-reorder="${next.nodeId},${next.linkIndex}"]`).forEach((el) => el.classList.add('show'));
     }
   }
 
   private onPointerMove(e: PointerEvent): void {
-    if (!this.drag) return;
+    if (!this.drag) {
+      this.updateHoverReveal(e);
+      return;
+    }
     if (this.drag.kind === 'pan') {
       this.view.x = this.drag.ox + (e.clientX - this.drag.sx);
       this.view.y = this.drag.oy + (e.clientY - this.drag.sy);
       this.applyView();
+    } else if (this.drag.kind === 'band') {
+      const p = this.screenToWorld(e.clientX, e.clientY);
+      const movedPx = Math.hypot(e.clientX - this.lastMouse.x, e.clientY - this.lastMouse.y);
+      if (!this.drag.moved && movedPx < 4) return;
+      this.drag.moved = true;
+      this.drag.cur = p;
+      this.updateBandRect();
+      // live-preview the band selection (re-render only when the set changes)
+      const hit = this.bandHit(this.drag.start, p);
+      const prev = this.selectedIds;
+      const same = prev.size === hit.size && [...hit].every((id) => prev.has(id));
+      this.selectedIds = hit;
+      if (!same) {
+        this.selectedNodeId = hit.size === 1 ? [...hit][0] : null;
+        this.render();
+        this.cb.onMultiSelect([...hit]);
+      }
     } else {
       const p = this.screenToWorld(e.clientX, e.clientY);
       const nx = Math.round(p.x - this.drag.dx);
@@ -218,6 +359,14 @@ export class GraphView {
       const pos = this.positions.get(this.drag.nodeId) ?? { x: 0, y: 0 };
       if (!this.drag.moved && Math.abs(nx - pos.x) < 4 && Math.abs(ny - pos.y) < 4) return;
       this.positions.set(this.drag.nodeId, { x: nx, y: ny });
+      if (this.drag.group) {
+        // group members follow the primary card's TOTAL delta from drag start
+        const ddx = nx - this.drag.orig.x, ddy = ny - this.drag.orig.y;
+        for (const [id, start] of this.drag.group) {
+          if (id === this.drag.nodeId) continue;
+          this.positions.set(id, { x: start.x + ddx, y: start.y + ddy });
+        }
+      }
       this.drag.moved = true;
       this.render();
     }
@@ -231,22 +380,69 @@ export class GraphView {
         // no movement: it was a click on the link row
         this.cb.onSelectLink(this.drag.pendingLink.nodeId, this.drag.pendingLink.linkIndex);
       }
+    } else if (this.drag?.kind === 'band') {
+      this.bandRect?.setAttribute('visibility', 'hidden');
+      if (this.drag.moved) {
+        const hit = this.bandHit(this.drag.start, this.drag.cur);
+        this.selectedIds = hit;
+        if (hit.size === 1) {
+          const id = [...hit][0];
+          this.selectedNodeId = id;
+          this.render();
+          this.cb.onSelectNode(id);
+        } else if (hit.size > 1) {
+          this.selectedNodeId = null;
+          this.render();
+          this.cb.onMultiSelect([...hit]);
+        }
+      }
     }
     this.drag = null;
+  }
+
+  private updateBandRect(): void {
+    if (!this.bandRect || !this.drag || this.drag.kind !== 'band') return;
+    const x = Math.min(this.drag.start.x, this.drag.cur.x);
+    const y = Math.min(this.drag.start.y, this.drag.cur.y);
+    this.bandRect.setAttribute('x', String(x));
+    this.bandRect.setAttribute('y', String(y));
+    this.bandRect.setAttribute('width', String(Math.abs(this.drag.cur.x - this.drag.start.x)));
+    this.bandRect.setAttribute('height', String(Math.abs(this.drag.cur.y - this.drag.start.y)));
+    this.bandRect.setAttribute('visibility', 'visible');
+  }
+
+  /** ids of nodes whose card intersects the band (world coords) */
+  private bandHit(a: Point, b: Point): Set<number> {
+    const hit = new Set<number>();
+    if (!this.model) return hit;
+    const x0 = Math.min(a.x, b.x), x1 = Math.max(a.x, b.x);
+    const y0 = Math.min(a.y, b.y), y1 = Math.max(a.y, b.y);
+    for (const nd of this.model.nodes()) {
+      const id = this.model.getNum(nd, 'mId');
+      const pos = this.positions.get(id);
+      const m = this.cardMetrics.get(id);
+      if (!pos) continue;
+      const w = m?.w ?? 216, h = m?.h ?? 64;
+      if (pos.x < x1 && pos.x + w > x0 && pos.y < y1 && pos.y + h > y0) hit.add(id);
+    }
+    return hit;
   }
 
   selectNode(nodeId: number): void {
     this.selectedNodeId = nodeId;
     this.selectedLink = null;
+    this.selectedIds = new Set([nodeId]);
     this.render();
   }
   selectLink(nodeId: number, linkIndex: number): void {
     this.selectedLink = { nodeId, linkIndex };
+    this.selectedIds = new Set([nodeId]);
     this.render();
   }
   clearSelection(): void {
     this.selectedNodeId = null;
     this.selectedLink = null;
+    this.selectedIds.clear();
     this.render();
   }
 
@@ -409,6 +605,7 @@ export class GraphView {
       const id = model.getNum(nd, 'mId');
       cards.set(id, measureCard(model, nd, id, initId));
     }
+    this.cardMetrics = cards;
 
     // edges — anchored per row: start at the out-row's right edge on the
     // source card, end at the matching in-row's left edge on the target card
@@ -474,7 +671,9 @@ export class GraphView {
       bodyRect.setAttribute('width', String(W));
       bodyRect.setAttribute('height', String(H));
       bodyRect.setAttribute('rx', '8');
-      bodyRect.setAttribute('class', 'nodeCard' + (this.selectedNodeId === id ? ' sel' : '') + (m.isInit ? ' init' : ''));
+      bodyRect.setAttribute('class', 'nodeCard'
+        + (this.selectedNodeId === id ? ' sel' : this.selectedIds.has(id) ? ' multisel' : '')
+        + (m.isInit ? ' init' : ''));
       g.appendChild(bodyRect);
 
       const header = document.createElementNS(ns, 'path');
@@ -592,6 +791,36 @@ export class GraphView {
         const title = document.createElementNS(ns, 'title');
         title.textContent = `→ ${r.dst}${r.cond ? `  [${r.cond}]` : ''}`;
         rg.appendChild(title);
+        // hover reorder handles (just outside the card): link order is the
+        // game's evaluation priority, first matching link wins
+        const linkCount = model.linksOf(nd).length;
+        const reorder = (dir: -1 | 1, gx: number): void => {
+          const btn = document.createElementNS(ns, 'g');
+          btn.dataset['reorder'] = `${id},${r.idx}`;
+          btn.dataset['dir'] = String(dir);
+          btn.setAttribute('class', 'rowReorder');
+          const hitR = document.createElementNS(ns, 'rect');
+          hitR.setAttribute('x', String(gx - 2));
+          hitR.setAttribute('y', String(HEADER + 2 + r.idx * ROW_H));
+          hitR.setAttribute('width', '14');
+          hitR.setAttribute('height', '14');
+          hitR.setAttribute('rx', '3');
+          hitR.setAttribute('class', 'rowReorderHit');
+          btn.appendChild(hitR);
+          const arrow = document.createElementNS(ns, 'text');
+          arrow.setAttribute('x', String(gx + 5));
+          arrow.setAttribute('y', String(HEADER + 13 + r.idx * ROW_H));
+          arrow.setAttribute('text-anchor', 'middle');
+          arrow.setAttribute('class', 'rowReorderArrow');
+          arrow.textContent = dir < 0 ? '↑' : '↓';
+          btn.appendChild(arrow);
+          btn.setAttribute('visibility', dir < 0
+            ? (r.idx === 0 ? 'hidden' : 'visible')
+            : (r.idx === linkCount - 1 ? 'hidden' : 'visible'));
+          rg.appendChild(btn);
+        };
+        reorder(-1, W + 6);
+        reorder(1, W + 19);
         g.appendChild(rg);
       });
       this.nodeLayer.appendChild(g);

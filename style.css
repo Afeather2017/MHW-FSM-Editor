@@ -144,6 +144,25 @@ g:hover > .nodeCard { stroke: var(--dim); }
 .nodeCard.sel { stroke: #ff5252; stroke-width: 2.6; fill: #2d2626; }
 .nodeCard.init { stroke: var(--ok); }
 .nodeCard.init.sel { stroke: var(--accent); }
+.nodeCard.multisel { stroke: var(--accent); stroke-width: 2.4; fill: #22303c; }
+.nodeCard.multisel.init { stroke: var(--ok); }
+
+/* rubber-band multi-select rectangle */
+.bandRect {
+  fill: rgba(79, 195, 247, .10);
+  stroke: var(--accent); stroke-width: 1.2; stroke-dasharray: 5 3;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
+
+/* per-row link reorder handles (outside the card's right edge, hover only) */
+.rowReorder { cursor: pointer; }
+.rowReorder .rowReorderHit { fill: transparent; }
+.rowReorder .rowReorderArrow { fill: var(--dim); font-size: 11px; }
+.edgeRow .rowReorder { opacity: 0; transition: opacity .08s; }
+.edgeRow:hover .rowReorder, .rowReorder.show { opacity: 1; }
+.rowReorder:hover .rowReorderHit { fill: rgba(79, 195, 247, .18); }
+.rowReorder:hover .rowReorderArrow { fill: var(--accent); }
 .nodeName { fill: var(--text); font-size: 13px; font-weight: 600; }
 .nodeSub { fill: var(--dim); font-size: 11px; }
 .initBadge { fill: var(--ok); font-size: 12px; }

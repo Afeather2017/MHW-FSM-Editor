@@ -27,10 +27,20 @@ function walkInstances(root: XfsInstance, fn: (inst: XfsInstance) => void): void
   visit(root);
 }
 
-const DEPLOYED = 'E:/SteamLibrary/steamapps/common/Monster Hunter World/nativePC/hm/wp/wp03/wp03_action.fsm';
-const VANILLA = 'E:/MHW-arts/wp03_action.vanilla-seek2thrust.fsm';
-const TESTFILE = 'E:/MHW-arts/wp03_action.test-see2thrust.fsm';
-const XML = 'E:/MHW-arts/wp03_action.xml';
+// real sample files; on machines without the game install the repo-local
+// copies under fsm/ are used (same wp03_action.fsm as the deployed one)
+function firstExisting(...paths: string[]): string | null {
+  for (const p of paths) if (fs.existsSync(p)) return p;
+  return null;
+}
+const DEPLOYED = firstExisting(
+  'E:/SteamLibrary/steamapps/common/Monster Hunter World/nativePC/hm/wp/wp03/wp03_action.fsm',
+  'fsm/wp03_action.fsm',
+)!;
+const VANILLA = firstExisting(
+  'E:/MHW-arts/wp03_action.vanilla-seek2thrust.fsm',
+  'fsm/wp03_action - 副本.fsm',
+)!;
 
 console.log('== XFS binary round-trip ==');
 for (const path of [DEPLOYED, VANILLA]) {
@@ -70,16 +80,20 @@ for (const path of [DEPLOYED, VANILLA]) {
 
 console.log('== MtSerializer XML ==');
 {
-  const text = fs.readFileSync(XML, 'utf-8');
-  const doc = parseMtXml(text);
-  check('xml: root name', doc.rootName === 'cFSMPl_W03', doc.rootName);
-  const rootCluster = doc.root.__vals__['mpRootCluster'] as XfsInstance;
+  // no shipped XML sample needed: derive one from the binary sample, then
+  // verify parse(write(parse)) is structurally identical
+  const doc = parseXfs(fs.readFileSync(DEPLOYED));
+  const text = writeMtXml(doc);
+  const parsed = parseMtXml(text);
+  check('xml: root name', parsed.rootName === 'cFSMPl_W03', parsed.rootName);
+  const rootCluster = parsed.root.__vals__['mpRootCluster'] as XfsInstance;
   const nodes = rootCluster.__vals__['mpNodeList'] as XfsInstance[];
-  check('xml: 59 nodes', Array.isArray(nodes) && nodes.length === 59, String(nodes?.length));
-  const out = writeMtXml(doc);
+  check('xml: 90 nodes', Array.isArray(nodes) && nodes.length === 90, String(nodes?.length));
+  const out = writeMtXml(parsed);
+  fs.mkdirSync('.tmp', { recursive: true });
   fs.writeFileSync('.tmp/wp03_action.roundtrip.xml', out, 'utf-8');
   const re = parseMtXml(out);
-  check('xml: parse(write(parse)) == parse', JSON.stringify(re.root) === JSON.stringify(doc.root));
+  check('xml: parse(write(parse)) == parse', JSON.stringify(re.root) === JSON.stringify(parsed.root));
   // semantic comparison against the binary parse of the same FSM version is
   // not possible (files differ); we check field presence instead
   const node0 = nodes[0];
@@ -89,13 +103,15 @@ console.log('== MtSerializer XML ==');
 
 console.log('== XML -> binary conversion ==');
 {
-  const text = fs.readFileSync(XML, 'utf-8');
-  const doc = parseMtXml(text);
-  const out = writeXfs(doc);
+  const doc = parseXfs(fs.readFileSync(DEPLOYED));
+  const text = writeMtXml(doc);
+  const doc2 = parseMtXml(text);
+  const out = writeXfs(doc2);
   const re = parseXfs(out);
   check('xml->bin: reparses cleanly', true);
   check('xml->bin: root name preserved', re.rootName === doc.rootName);
   check('xml->bin: instance count plausible', out.length > 1000, String(out.length));
+  fs.mkdirSync('.tmp', { recursive: true });
   fs.writeFileSync('.tmp/wp03_action.xml2bin.fsm', out);
 }
 
@@ -151,6 +167,36 @@ console.log('== editing operations ==');
   check('edit: action/motion survive round-trip',
     rt.nodeActionNo(rtAn) === 0 && rt.nodeMotionNo(rtMn)?.motion === 0);
   check('edit: validates clean after node creation', rt.validate().length === 0, rt.validate().join('; '));
+}
+
+console.log('== link reorder (priority order) ==');
+{
+  const m = FsmModel.fromBinary(fs.readFileSync(DEPLOYED), 'w3.fsm');
+  const nd = m.nodes().find((n) => m.linksOf(n).length >= 2)!;
+  const nid = m.getNum(nd, 'mId');
+  const links = m.linksOf(nd);
+  const l0 = links[0], l1 = links[1];
+  const total = links.length;
+  const nameOf = (x: { __vals__: Record<string, unknown> }): string =>
+    typeof x.__vals__['mName'] === 'string' ? (x.__vals__['mName'] as string) : '';
+  m.snapshot();
+  m.moveLink(nd, 1, 0);
+  check('reorder: move up swaps neighbours', m.linksOf(nd)[0] === l1 && m.linksOf(nd)[1] === l0);
+  // the swapped priority order survives a binary round-trip
+  const rt = FsmModel.fromBinary(m.toBinary(), 'rt.fsm');
+  const rtNd = rt.nodes().find((n) => rt.getNum(n, 'mId') === nid)!;
+  check('reorder: survives round-trip',
+    nameOf(rt.linksOf(rtNd)[0]) === nameOf(l1) && nameOf(rt.linksOf(rtNd)[1]) === nameOf(l0));
+  m.moveLink(nd, 0, 1);
+  check('reorder: move down restores', m.linksOf(nd)[0] === l0 && m.linksOf(nd)[1] === l1);
+  check('reorder: length unchanged', m.linksOf(nd).length === total);
+  m.moveLink(nd, -1, 0);
+  m.moveLink(nd, 0, 99);
+  check('reorder: out-of-range is a no-op', m.linksOf(nd)[0] === l0 && m.linksOf(nd).length === total);
+  m.undo(); // re-parses the tree, so verify by name not by instance identity
+  const nd2 = m.nodes().find((n) => m.getNum(n, 'mId') === nid)!;
+  check('reorder: undo restores order',
+    nameOf(m.linksOf(nd2)[0]) === nameOf(l0) && nameOf(m.linksOf(nd2)[1]) === nameOf(l1));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

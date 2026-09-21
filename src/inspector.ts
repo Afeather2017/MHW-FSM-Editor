@@ -9,6 +9,8 @@ export interface InspectorHost {
   setSelection(sel: Selection): void;
   requestRender(): void;
   selectNode(id: number): void;
+  /** swap link `linkIndex` with its neighbour — order = in-game priority */
+  reorderLink(nodeId: number, linkIndex: number, dir: -1 | 1): void;
 }
 
 const OPERATORS: [number, string][] = [
@@ -44,6 +46,7 @@ export function renderInspector(host: InspectorHost, root: HTMLElement): void {
     case 'none': renderRootHint(m, root); break;
     case 'root': renderRoot(m, host, root); break;
     case 'node': renderNode(m, host, root, sel.nodeId); break;
+    case 'multi': renderMulti(m, host, root, sel.nodeIds); break;
     case 'link': renderLink(m, host, root, sel.nodeId, sel.linkIndex); break;
     case 'condition': renderConditionEditor(m, host, root, sel.condIndex); break;
   }
@@ -157,6 +160,29 @@ function renderRoot(m: FsmModel, host: InspectorHost, root: HTMLElement): void {
   rowEl.appendChild(select);
 }
 
+// ----- multi selection -----
+
+function renderMulti(m: FsmModel, host: InspectorHost, root: HTMLElement, nodeIds: number[]): void {
+  const box = section(root, `已选中 ${nodeIds.length} 个节点`);
+  const info = document.createElement('div');
+  info.className = 'hintBox';
+  const rows = nodeIds.map((id) => {
+    const nd = m.nodeById(id);
+    return `<div>· ${id} — ${escapeHtml(nd ? m.str(nd, 'mName') || '(未命名)' : '(已删除)')}</div>`;
+  }).join('');
+  info.innerHTML =
+    `<p>在画布上拖动任一选中卡片即可<b>整体移动</b>；按 Delete 删除全部选中节点。</p>` +
+    `<p class="dim">${rows}</p>`;
+  box.appendChild(info);
+  button(box, '删除所选节点', () => {
+    if (!confirm(`删除选中的 ${nodeIds.length} 个节点？指向它们的链接也会一并删除。`)) return;
+    m.snapshot();
+    for (const id of nodeIds) m.deleteNode(id);
+    host.setSelection({ kind: 'none' });
+    host.requestRender();
+  }, 'danger');
+}
+
 // ----- node -----
 
 function renderNode(m: FsmModel, host: InspectorHost, root: HTMLElement, nodeId: number): void {
@@ -204,8 +230,14 @@ function renderNode(m: FsmModel, host: InspectorHost, root: HTMLElement, nodeId:
   });
   r.appendChild(condSelect);
 
-  // links
-  const linkBox = section(root, `出链接 (${m.linksOf(node).length})`);
+  // links — order matters: the game evaluates out-links top-down, so the
+  // first link whose condition matches wins (put `R+Circle` above `R`)
+  const linkCount = m.linksOf(node).length;
+  const linkBox = section(root, `出链接 (${linkCount})`);
+  const orderHint = document.createElement('div');
+  orderHint.className = 'dim small';
+  orderHint.textContent = '顺序 = 判定优先级：靠前的链接先匹配（如 R+○ 要放在 R 前面）。用 ↑↓ 调整。';
+  linkBox.appendChild(orderHint);
   m.linksOf(node).forEach((lk, idx) => {
     const lb = document.createElement('div');
     lb.className = 'linkItem' + (isLinkSelected(host, nodeId, idx) ? ' sel' : '');
@@ -229,6 +261,8 @@ function renderNode(m: FsmModel, host: InspectorHost, root: HTMLElement, nodeId:
     textInput(lb, m.str(lk, 'mName'), (v) => { m.snapshot(); m.setField(lk, 'mName', v); });
     const btns = document.createElement('span');
     btns.className = 'btns';
+    button(btns, '↑', () => host.reorderLink(nodeId, idx, -1), 'mini').disabled = idx === 0;
+    button(btns, '↓', () => host.reorderLink(nodeId, idx, 1), 'mini').disabled = idx === linkCount - 1;
     button(btns, '→', () => { host.selectNode(m.getNum(lk, 'mDestinationNodeId')); }, 'linkish');
     button(btns, '删', () => { m.snapshot(); m.deleteLink(node, idx); host.requestRender(); }, 'danger');
     lb.appendChild(btns);
@@ -333,6 +367,18 @@ function renderLink(m: FsmModel, host: InspectorHost, root: HTMLElement, nodeId:
   textInput(r, m.str(link, 'mName'), (v) => { m.snapshot(); m.setField(link, 'mName', v); });
 
   const dz = section(root, '操作');
+  const reorderRow = document.createElement('div');
+  reorderRow.className = 'row';
+  const linkTotal = m.linksOf(node).length;
+  button(reorderRow, '↑ 上移（更早判定）', () => host.reorderLink(nodeId, linkIndex, -1), 'mini')
+    .disabled = linkIndex === 0;
+  button(reorderRow, '↓ 下移（更晚判定）', () => host.reorderLink(nodeId, linkIndex, 1), 'mini')
+    .disabled = linkIndex >= linkTotal - 1;
+  dz.appendChild(reorderRow);
+  const orderNote = document.createElement('div');
+  orderNote.className = 'dim small';
+  orderNote.textContent = `本节点第 ${linkIndex + 1}/${linkTotal} 条链接。游戏从上到下判定，先匹配先生效。`;
+  dz.appendChild(orderNote);
   button(dz, '删除此链接', () => {
     m.snapshot();
     m.deleteLink(node, linkIndex);

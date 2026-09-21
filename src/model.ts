@@ -9,6 +9,7 @@ export type Selection =
   | { kind: 'none' }
   | { kind: 'root' }
   | { kind: 'node'; nodeId: number }
+  | { kind: 'multi'; nodeIds: number[] }
   | { kind: 'link'; nodeId: number; linkIndex: number }
   | { kind: 'condition'; condIndex: number };
 
@@ -219,6 +220,18 @@ export class FsmModel {
 
   deleteLink(node: XfsInstance, linkIndex: number): void {
     this.list(node, 'mpLinkList')?.splice(linkIndex, 1);
+  }
+
+  /** swap a link with its neighbour — link order is the game's evaluation
+   *  priority, so the first matching condition wins (e.g. `R+Circle` must sit
+   *  above plain `R`, or the shorter one always eats the input) */
+  moveLink(node: XfsInstance, from: number, to: number): void {
+    const list = this.list(node, 'mpLinkList');
+    if (!list || from === to) return;
+    if (from < 0 || to < 0 || from >= list.length || to >= list.length) return;
+    const [lk] = list.splice(from, 1);
+    list.splice(to, 0, lk);
+    this.dirty = true;
   }
 
   deleteCondition(condIndex: number): void {

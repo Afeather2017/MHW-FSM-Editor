@@ -211,6 +211,14 @@ const graph = new GraphView($('canvas') as unknown as SVGSVGElement, {
   onSelectLink(nodeId, linkIndex) { selection = { kind: 'link', nodeId, linkIndex }; renderSide(); updateInspector(); },
   onCreateNodeAt(world) { createNode('action', world); },
   onSelectionCleared() { selection = { kind: 'none' }; renderSide(); updateInspector(); },
+  onMultiSelect(ids) {
+    selection = ids.length > 1 ? { kind: 'multi', nodeIds: ids }
+      : ids.length === 1 ? { kind: 'node', nodeId: ids[0] }
+      : { kind: 'none' };
+    renderSide();
+    updateInspector();
+  },
+  onReorderLink(nodeId, linkIndex, dir) { reorderLink(nodeId, linkIndex, dir); },
   onContextMenu(ctx) {
     if (!model) return;
     if (ctx.kind === 'node' && ctx.nodeId !== undefined) {
@@ -219,7 +227,14 @@ const graph = new GraphView($('canvas') as unknown as SVGSVGElement, {
       const link = model.linksOf(model.nodeById(ctx.nodeId)!)[ctx.linkIndex];
       const condId = link ? model.getNum(link, 'mConditionId') : 0;
       const hasCond = link ? model.getNum(link, 'mExistCondition') === 1 : false;
+      const linkTotal = model.linksOf(model.nodeById(ctx.nodeId)!).length;
       openContextMenu([
+        ...(ctx.linkIndex > 0
+          ? [{ label: '↑ 上移（更早判定）', action: () => reorderLink(ctx.nodeId!, ctx.linkIndex!, -1) }]
+          : []),
+        ...(ctx.linkIndex < linkTotal - 1
+          ? [{ label: '↓ 下移（更晚判定）', action: () => reorderLink(ctx.nodeId!, ctx.linkIndex!, 1) }]
+          : []),
         hasCond
           ? {
               label: `编辑条件 #${condId}`,
@@ -276,6 +291,24 @@ const graph = new GraphView($('canvas') as unknown as SVGSVGElement, {
   },
 });
 
+/** swap a node's link with its neighbour; one undo step, selection follows */
+function reorderLink(nodeId: number, linkIndex: number, dir: -1 | 1): void {
+  const m = model;
+  if (!m) return;
+  const node = m.nodeById(nodeId);
+  if (!node) return;
+  const to = linkIndex + dir;
+  if (to < 0 || to >= m.linksOf(node).length) return;
+  m.snapshot();
+  m.moveLink(node, linkIndex, to);
+  // keep an open link selection attached to the link it was on
+  if (selection.kind === 'link' && selection.nodeId === nodeId) {
+    if (selection.linkIndex === linkIndex) selection = { kind: 'link', nodeId, linkIndex: to };
+    else if (selection.linkIndex === to) selection = { kind: 'link', nodeId, linkIndex };
+  }
+  renderAll();
+}
+
 function ensureChangeHook(): void {
   model!.onChange = () => renderAll();
 }
@@ -302,6 +335,7 @@ function updateInspector(): void {
       selection,
       setSelection: (sel) => { selection = sel; },
       requestRender: () => renderAll(),
+      reorderLink,
       selectNode: (id) => {
         graph.selectNode(id);
         selection = { kind: 'node', nodeId: id };
@@ -332,12 +366,14 @@ function renderSide(): void {
   if (!m) return;
   const tab = ($('tabNodes') as HTMLButtonElement).classList.contains('active') ? 'nodes' : 'conds';
   if (tab === 'nodes') {
+    const multiSel = selection.kind === 'multi' ? new Set(selection.nodeIds) : null;
     for (const nd of m.nodes()) {
       const id = m.getNum(nd, 'mId');
       const name = m.str(nd, 'mName');
       if (search && !`${id} ${name} ${m.nodeActionNo(nd) ?? ''}`.toLowerCase().includes(search)) continue;
       const r = document.createElement('div');
-      r.className = 'nodeRow' + (selection.kind === 'node' && selection.nodeId === id ? ' sel' : '');
+      r.className = 'nodeRow'
+        + ((selection.kind === 'node' && selection.nodeId === id) || multiSel?.has(id) ? ' sel' : '');
       r.innerHTML =
         `<span class="nid">${id}</span><span class="nname">${escapeHtml(name) || '<i>未命名</i>'}</span>` +
         `<span class="nact">${m.nodeActionNo(nd) ?? '·'}</span><span class="ncnt">${m.linksOf(nd).length}</span>`;
@@ -506,6 +542,17 @@ document.addEventListener('keydown', (e) => {
   if (e.ctrlKey && e.key.toLowerCase() === 'z') { e.preventDefault(); model?.undo(); return; }
   if (e.ctrlKey && (e.key.toLowerCase() === 'y' || (e.shiftKey && e.key.toLowerCase() === 'z'))) { e.preventDefault(); model?.redo(); return; }
   if (e.ctrlKey && e.key.toLowerCase() === 'f') { e.preventDefault(); $('search').focus(); return; }
+  if ((e.key === 'Delete' || e.key === 'Backspace') && selection.kind === 'multi') {
+    e.preventDefault();
+    const ids = [...selection.nodeIds];
+    if (!confirm(`删除选中的 ${ids.length} 个节点？指向它们的链接也会一并删除。`)) return;
+    model?.snapshot();
+    for (const id of ids) model?.deleteNode(id);
+    selection = { kind: 'none' };
+    graph.clearSelection();
+    renderAll();
+    return;
+  }
   if (e.key === 'f') graph.fit();
   if (e.key === 'Escape') { selection = { kind: 'none' }; graph.clearSelection(); renderSide(); updateInspector(); }
 });
@@ -592,6 +639,7 @@ renderStatus();
 
 // ---------- automation / test hooks (harmless in normal use) ----------
 const w = window as unknown as Record<string, unknown>;
+w['FSM_STUDIO_GRAPH'] = graph;
 w['FSM_STUDIO_LOAD'] = (name: string, b64: string): string => {
   const bin = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
   try {

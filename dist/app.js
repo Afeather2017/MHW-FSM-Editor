@@ -1021,6 +1021,17 @@
     deleteLink(node, linkIndex) {
       this.list(node, "mpLinkList")?.splice(linkIndex, 1);
     }
+    /** swap a link with its neighbour — link order is the game's evaluation
+     *  priority, so the first matching condition wins (e.g. `R+Circle` must sit
+     *  above plain `R`, or the shorter one always eats the input) */
+    moveLink(node, from, to) {
+      const list = this.list(node, "mpLinkList");
+      if (!list || from === to) return;
+      if (from < 0 || to < 0 || from >= list.length || to >= list.length) return;
+      const [lk] = list.splice(from, 1);
+      list.splice(to, 0, lk);
+      this.dirty = true;
+    }
     deleteCondition(condIndex) {
       const ct = this.conditionTree();
       if (!ct) return;
@@ -1332,8 +1343,15 @@
       this.highlightIds = /* @__PURE__ */ new Set();
       this.selectedNodeId = null;
       this.selectedLink = null;
+      /** multi-selection (band select / ctrl-click); includes selectedNodeId */
+      this.selectedIds = /* @__PURE__ */ new Set();
       this.drag = null;
       this.lastMouse = { x: 0, y: 0 };
+      this.bandRect = null;
+      /** last rendered card sizes, for band hit-testing without re-measuring */
+      this.cardMetrics = /* @__PURE__ */ new Map();
+      /** the reorder-handle row the pointer is over (revealed above the edges) */
+      this.hoverReveal = null;
       this.svg = svg;
       this.cb = cb;
       const ns = "http://www.w3.org/2000/svg";
@@ -1346,6 +1364,10 @@
       this.world.appendChild(this.nodeLayer);
       this.world.appendChild(this.edgeLayer);
       svg.appendChild(this.world);
+      this.bandRect = document.createElementNS(ns, "rect");
+      this.bandRect.setAttribute("class", "bandRect");
+      this.bandRect.setAttribute("visibility", "hidden");
+      this.world.appendChild(this.bandRect);
       svg.addEventListener("wheel", (e) => this.onWheel(e), { passive: false });
       svg.addEventListener("contextmenu", (e) => {
         e.preventDefault();
@@ -1389,6 +1411,7 @@
         this.world.appendChild(this.edgeLayer);
         this.world.appendChild(this.nodeLayer);
       }
+      if (this.bandRect) this.world.appendChild(this.bandRect);
       document.dispatchEvent(new CustomEvent("fsmstudio:edgez", { detail: v }));
     }
     setModel(model2) {
@@ -1396,6 +1419,7 @@
       this.positions.clear();
       this.selectedNodeId = null;
       this.selectedLink = null;
+      this.selectedIds.clear();
       this.restorePositions();
     }
     // ----- coordinates -----
@@ -1456,45 +1480,157 @@
       }
       if (e.button !== 0) return;
       const target = e.target;
+      const p = this.screenToWorld(e.clientX, e.clientY);
+      if (this.hoverReveal) {
+        const h = this.hitReorderHandle(p);
+        if (h && h.nodeId === this.hoverReveal.nodeId && h.linkIndex === this.hoverReveal.linkIndex) {
+          this.hoverReveal = null;
+          this.svg.querySelectorAll("g[data-reorder].show").forEach((el) => el.classList.remove("show"));
+          this.cb.onReorderLink(h.nodeId, h.linkIndex, h.dir);
+          return;
+        }
+      }
+      this.hoverReveal = null;
+      this.svg.querySelectorAll("g[data-reorder].show").forEach((el) => el.classList.remove("show"));
+      const reorder = target.closest("[data-reorder]");
+      if (reorder) {
+        const [nid, li] = (reorder.dataset["reorder"] ?? "").split(",").map(Number);
+        const dir = Number(reorder.dataset["dir"]);
+        this.cb.onReorderLink(nid, li, dir);
+        return;
+      }
       const edge = target.closest("[data-edge]");
+      const nodeG = target.closest("[data-node-id]");
       if (edge) {
         const [nid, li] = (edge.dataset["edge"] ?? "").split(",").map(Number);
-        this.selectLink(nid, li);
-        const p = this.screenToWorld(e.clientX, e.clientY);
         const pos = this.positions.get(nid) ?? { x: 0, y: 0 };
+        if (this.selectedIds.has(nid) && this.selectedIds.size > 1) {
+          this.drag = { kind: "node", nodeId: nid, dx: p.x - pos.x, dy: p.y - pos.y, orig: { ...pos }, moved: false, group: this.groupStart() };
+          return;
+        }
+        this.selectedIds.clear();
+        this.selectLink(nid, li);
         this.drag = {
           kind: "node",
           nodeId: nid,
           dx: p.x - pos.x,
           dy: p.y - pos.y,
+          orig: { ...pos },
           moved: false,
           pendingLink: { nodeId: nid, linkIndex: li }
         };
         return;
       }
-      const nodeG = target.closest("[data-node-id]");
       if (nodeG) {
-        const nodeId = Number(nodeG.dataset["nodeId"]);
-        const p = this.screenToWorld(e.clientX, e.clientY);
-        const pos = this.positions.get(nodeId) ?? { x: 0, y: 0 };
-        this.drag = { kind: "node", nodeId, dx: p.x - pos.x, dy: p.y - pos.y, moved: false };
-        this.selectNode(nodeId);
+        const nid = Number(nodeG.dataset["nodeId"]);
+        if (e.ctrlKey || e.metaKey || e.shiftKey) {
+          if (this.selectedIds.has(nid) && this.selectedIds.size > 1) this.selectedIds.delete(nid);
+          else this.selectedIds.add(nid);
+          this.selectedLink = null;
+          if (this.selectedIds.size === 1) {
+            const only = [...this.selectedIds][0];
+            this.selectedNodeId = only;
+            this.render();
+            this.cb.onSelectNode(only);
+          } else {
+            this.selectedNodeId = null;
+            this.render();
+            this.cb.onMultiSelect([...this.selectedIds]);
+          }
+          return;
+        }
+        const pos = this.positions.get(nid) ?? { x: 0, y: 0 };
+        if (this.selectedIds.has(nid) && this.selectedIds.size > 1) {
+          this.drag = { kind: "node", nodeId: nid, dx: p.x - pos.x, dy: p.y - pos.y, orig: { ...pos }, moved: false, group: this.groupStart() };
+          return;
+        }
+        this.drag = { kind: "node", nodeId: nid, dx: p.x - pos.x, dy: p.y - pos.y, orig: { ...pos }, moved: false };
+        this.selectNode(nid);
+        this.cb.onSelectNode(nid);
         return;
       }
       if (e.target === this.svg) {
-        if (this.selectedNodeId !== null || this.selectedLink !== null) {
-          this.selectedNodeId = null;
-          this.selectedLink = null;
-          this.cb.onSelectionCleared();
-        }
+        const hadSel = this.selectedNodeId !== null || this.selectedLink !== null || this.selectedIds.size > 0;
+        this.selectedNodeId = null;
+        this.selectedLink = null;
+        this.selectedIds.clear();
+        if (hadSel) this.cb.onSelectionCleared();
+        this.drag = { kind: "band", start: p, cur: p, moved: false };
+        this.updateBandRect();
+      }
+    }
+    groupStart() {
+      const map = /* @__PURE__ */ new Map();
+      for (const id of this.selectedIds) {
+        const pos = this.positions.get(id);
+        if (pos) map.set(id, { ...pos });
+      }
+      return map;
+    }
+    /** reorder-handle hit test in world coords: the ↑/↓ strip just right of a
+     *  card's out-link rows. Returns null outside any handle (incl. boundary
+     *  rows whose handle is hidden). */
+    hitReorderHandle(w2) {
+      if (!this.model) return null;
+      for (const nd of this.model.nodes()) {
+        const id = this.model.getNum(nd, "mId");
+        const pos = this.positions.get(id);
+        const m2 = this.cardMetrics.get(id);
+        if (!pos || !m2 || m2.outColW === 0) continue;
+        const dx = w2.x - pos.x, dy = w2.y - pos.y;
+        if (dx < m2.w + 4 || dx > m2.w + 32) continue;
+        const row2 = Math.floor((dy - 26) / 16);
+        if (row2 < 0 || dy > 26 + row2 * 16 + 14) continue;
+        const linkCount = this.model.linksOf(nd).length;
+        const dir = dx < m2.w + 17 ? -1 : 1;
+        if (row2 >= linkCount) continue;
+        if (dir < 0 && row2 === 0) continue;
+        if (dir > 0 && row2 >= linkCount - 1) continue;
+        return { nodeId: id, linkIndex: row2, dir };
+      }
+      return null;
+    }
+    /** reveal the reorder handles under the pointer even though edge paths
+     *  render above them (geometry-based, so z-order can't hide them) */
+    updateHoverReveal(e) {
+      const t = e.target;
+      let next = null;
+      if (t && this.svg.contains(t) && !this.drag) {
+        const h = this.hitReorderHandle(this.screenToWorld(e.clientX, e.clientY));
+        if (h) next = { nodeId: h.nodeId, linkIndex: h.linkIndex };
+      }
+      if (this.hoverReveal?.nodeId === next?.nodeId && this.hoverReveal?.linkIndex === next?.linkIndex) return;
+      this.hoverReveal = next;
+      this.svg.querySelectorAll("g[data-reorder].show").forEach((el) => el.classList.remove("show"));
+      if (next) {
+        this.svg.querySelectorAll(`g[data-reorder="${next.nodeId},${next.linkIndex}"]`).forEach((el) => el.classList.add("show"));
       }
     }
     onPointerMove(e) {
-      if (!this.drag) return;
+      if (!this.drag) {
+        this.updateHoverReveal(e);
+        return;
+      }
       if (this.drag.kind === "pan") {
         this.view.x = this.drag.ox + (e.clientX - this.drag.sx);
         this.view.y = this.drag.oy + (e.clientY - this.drag.sy);
         this.applyView();
+      } else if (this.drag.kind === "band") {
+        const p = this.screenToWorld(e.clientX, e.clientY);
+        const movedPx = Math.hypot(e.clientX - this.lastMouse.x, e.clientY - this.lastMouse.y);
+        if (!this.drag.moved && movedPx < 4) return;
+        this.drag.moved = true;
+        this.drag.cur = p;
+        this.updateBandRect();
+        const hit = this.bandHit(this.drag.start, p);
+        const prev = this.selectedIds;
+        const same = prev.size === hit.size && [...hit].every((id) => prev.has(id));
+        this.selectedIds = hit;
+        if (!same) {
+          this.selectedNodeId = hit.size === 1 ? [...hit][0] : null;
+          this.render();
+          this.cb.onMultiSelect([...hit]);
+        }
       } else {
         const p = this.screenToWorld(e.clientX, e.clientY);
         const nx = Math.round(p.x - this.drag.dx);
@@ -1502,6 +1638,13 @@
         const pos = this.positions.get(this.drag.nodeId) ?? { x: 0, y: 0 };
         if (!this.drag.moved && Math.abs(nx - pos.x) < 4 && Math.abs(ny - pos.y) < 4) return;
         this.positions.set(this.drag.nodeId, { x: nx, y: ny });
+        if (this.drag.group) {
+          const ddx = nx - this.drag.orig.x, ddy = ny - this.drag.orig.y;
+          for (const [id, start] of this.drag.group) {
+            if (id === this.drag.nodeId) continue;
+            this.positions.set(id, { x: start.x + ddx, y: start.y + ddy });
+          }
+        }
         this.drag.moved = true;
         this.render();
       }
@@ -1513,21 +1656,66 @@
         } else if (this.drag.pendingLink) {
           this.cb.onSelectLink(this.drag.pendingLink.nodeId, this.drag.pendingLink.linkIndex);
         }
+      } else if (this.drag?.kind === "band") {
+        this.bandRect?.setAttribute("visibility", "hidden");
+        if (this.drag.moved) {
+          const hit = this.bandHit(this.drag.start, this.drag.cur);
+          this.selectedIds = hit;
+          if (hit.size === 1) {
+            const id = [...hit][0];
+            this.selectedNodeId = id;
+            this.render();
+            this.cb.onSelectNode(id);
+          } else if (hit.size > 1) {
+            this.selectedNodeId = null;
+            this.render();
+            this.cb.onMultiSelect([...hit]);
+          }
+        }
       }
       this.drag = null;
+    }
+    updateBandRect() {
+      if (!this.bandRect || !this.drag || this.drag.kind !== "band") return;
+      const x = Math.min(this.drag.start.x, this.drag.cur.x);
+      const y = Math.min(this.drag.start.y, this.drag.cur.y);
+      this.bandRect.setAttribute("x", String(x));
+      this.bandRect.setAttribute("y", String(y));
+      this.bandRect.setAttribute("width", String(Math.abs(this.drag.cur.x - this.drag.start.x)));
+      this.bandRect.setAttribute("height", String(Math.abs(this.drag.cur.y - this.drag.start.y)));
+      this.bandRect.setAttribute("visibility", "visible");
+    }
+    /** ids of nodes whose card intersects the band (world coords) */
+    bandHit(a, b) {
+      const hit = /* @__PURE__ */ new Set();
+      if (!this.model) return hit;
+      const x0 = Math.min(a.x, b.x), x1 = Math.max(a.x, b.x);
+      const y0 = Math.min(a.y, b.y), y1 = Math.max(a.y, b.y);
+      for (const nd of this.model.nodes()) {
+        const id = this.model.getNum(nd, "mId");
+        const pos = this.positions.get(id);
+        const m2 = this.cardMetrics.get(id);
+        if (!pos) continue;
+        const w2 = m2?.w ?? 216, h = m2?.h ?? 64;
+        if (pos.x < x1 && pos.x + w2 > x0 && pos.y < y1 && pos.y + h > y0) hit.add(id);
+      }
+      return hit;
     }
     selectNode(nodeId) {
       this.selectedNodeId = nodeId;
       this.selectedLink = null;
+      this.selectedIds = /* @__PURE__ */ new Set([nodeId]);
       this.render();
     }
     selectLink(nodeId, linkIndex) {
       this.selectedLink = { nodeId, linkIndex };
+      this.selectedIds = /* @__PURE__ */ new Set([nodeId]);
       this.render();
     }
     clearSelection() {
       this.selectedNodeId = null;
       this.selectedLink = null;
+      this.selectedIds.clear();
       this.render();
     }
     // ----- layout -----
@@ -1685,6 +1873,7 @@
         const id = model2.getNum(nd, "mId");
         cards.set(id, measureCard(model2, nd, id, initId));
       }
+      this.cardMetrics = cards;
       const rowY = (i) => 24 + 2 + i * 16 + 8;
       this.edgeLayer.innerHTML = "";
       for (const nd of model2.nodes()) {
@@ -1741,7 +1930,7 @@
         bodyRect.setAttribute("width", String(W));
         bodyRect.setAttribute("height", String(H));
         bodyRect.setAttribute("rx", "8");
-        bodyRect.setAttribute("class", "nodeCard" + (this.selectedNodeId === id ? " sel" : "") + (m2.isInit ? " init" : ""));
+        bodyRect.setAttribute("class", "nodeCard" + (this.selectedNodeId === id ? " sel" : this.selectedIds.has(id) ? " multisel" : "") + (m2.isInit ? " init" : ""));
         g.appendChild(bodyRect);
         const header = document.createElementNS(ns, "path");
         header.setAttribute("d", `M 0,8 a 8,8 0 0 1 8,-8 L ${W - 8},0 a 8,8 0 0 1 8,8 L ${W},${HEADER} L 0,${HEADER} Z`);
@@ -1852,6 +2041,32 @@
           const title = document.createElementNS(ns, "title");
           title.textContent = `→ ${r.dst}${r.cond ? `  [${r.cond}]` : ""}`;
           rg.appendChild(title);
+          const linkCount = model2.linksOf(nd).length;
+          const reorder = (dir, gx) => {
+            const btn2 = document.createElementNS(ns, "g");
+            btn2.dataset["reorder"] = `${id},${r.idx}`;
+            btn2.dataset["dir"] = String(dir);
+            btn2.setAttribute("class", "rowReorder");
+            const hitR = document.createElementNS(ns, "rect");
+            hitR.setAttribute("x", String(gx - 2));
+            hitR.setAttribute("y", String(HEADER + 2 + r.idx * ROW_H));
+            hitR.setAttribute("width", "14");
+            hitR.setAttribute("height", "14");
+            hitR.setAttribute("rx", "3");
+            hitR.setAttribute("class", "rowReorderHit");
+            btn2.appendChild(hitR);
+            const arrow = document.createElementNS(ns, "text");
+            arrow.setAttribute("x", String(gx + 5));
+            arrow.setAttribute("y", String(HEADER + 13 + r.idx * ROW_H));
+            arrow.setAttribute("text-anchor", "middle");
+            arrow.setAttribute("class", "rowReorderArrow");
+            arrow.textContent = dir < 0 ? "↑" : "↓";
+            btn2.appendChild(arrow);
+            btn2.setAttribute("visibility", dir < 0 ? r.idx === 0 ? "hidden" : "visible" : r.idx === linkCount - 1 ? "hidden" : "visible");
+            rg.appendChild(btn2);
+          };
+          reorder(-1, W + 6);
+          reorder(1, W + 19);
           g.appendChild(rg);
         });
         this.nodeLayer.appendChild(g);
@@ -1978,6 +2193,9 @@
       case "node":
         renderNode(m2, host, root, sel.nodeId);
         break;
+      case "multi":
+        renderMulti(m2, host, root, sel.nodeIds);
+        break;
       case "link":
         renderLink(m2, host, root, sel.nodeId, sel.linkIndex);
         break;
@@ -2094,6 +2312,24 @@
     });
     rowEl.appendChild(select);
   }
+  function renderMulti(m2, host, root, nodeIds) {
+    const box = section(root, `已选中 ${nodeIds.length} 个节点`);
+    const info = document.createElement("div");
+    info.className = "hintBox";
+    const rows = nodeIds.map((id) => {
+      const nd = m2.nodeById(id);
+      return `<div>· ${id} — ${escapeHtml(nd ? m2.str(nd, "mName") || "(未命名)" : "(已删除)")}</div>`;
+    }).join("");
+    info.innerHTML = `<p>在画布上拖动任一选中卡片即可<b>整体移动</b>；按 Delete 删除全部选中节点。</p><p class="dim">${rows}</p>`;
+    box.appendChild(info);
+    button(box, "删除所选节点", () => {
+      if (!confirm(`删除选中的 ${nodeIds.length} 个节点？指向它们的链接也会一并删除。`)) return;
+      m2.snapshot();
+      for (const id of nodeIds) m2.deleteNode(id);
+      host.setSelection({ kind: "none" });
+      host.requestRender();
+    }, "danger");
+  }
   function renderNode(m2, host, root, nodeId) {
     const node = m2.nodeById(nodeId);
     if (!node) {
@@ -2159,7 +2395,12 @@
       m2.setField(node, "mConditionTrainsitionFromAllId", Number(condSelect.value));
     });
     r.appendChild(condSelect);
-    const linkBox = section(root, `出链接 (${m2.linksOf(node).length})`);
+    const linkCount = m2.linksOf(node).length;
+    const linkBox = section(root, `出链接 (${linkCount})`);
+    const orderHint = document.createElement("div");
+    orderHint.className = "dim small";
+    orderHint.textContent = "顺序 = 判定优先级：靠前的链接先匹配（如 R+○ 要放在 R 前面）。用 ↑↓ 调整。";
+    linkBox.appendChild(orderHint);
     m2.linksOf(node).forEach((lk, idx) => {
       const lb = document.createElement("div");
       lb.className = "linkItem" + (isLinkSelected(host, nodeId, idx) ? " sel" : "");
@@ -2193,6 +2434,8 @@
       });
       const btns = document.createElement("span");
       btns.className = "btns";
+      button(btns, "↑", () => host.reorderLink(nodeId, idx, -1), "mini").disabled = idx === 0;
+      button(btns, "↓", () => host.reorderLink(nodeId, idx, 1), "mini").disabled = idx === linkCount - 1;
       button(btns, "→", () => {
         host.selectNode(m2.getNum(lk, "mDestinationNodeId"));
       }, "linkish");
@@ -2309,6 +2552,16 @@
       m2.setField(link, "mName", v);
     });
     const dz = section(root, "操作");
+    const reorderRow = document.createElement("div");
+    reorderRow.className = "row";
+    const linkTotal = m2.linksOf(node).length;
+    button(reorderRow, "↑ 上移（更早判定）", () => host.reorderLink(nodeId, linkIndex, -1), "mini").disabled = linkIndex === 0;
+    button(reorderRow, "↓ 下移（更晚判定）", () => host.reorderLink(nodeId, linkIndex, 1), "mini").disabled = linkIndex >= linkTotal - 1;
+    dz.appendChild(reorderRow);
+    const orderNote = document.createElement("div");
+    orderNote.className = "dim small";
+    orderNote.textContent = `本节点第 ${linkIndex + 1}/${linkTotal} 条链接。游戏从上到下判定，先匹配先生效。`;
+    dz.appendChild(orderNote);
     button(dz, "删除此链接", () => {
       m2.snapshot();
       m2.deleteLink(node, linkIndex);
@@ -2798,6 +3051,14 @@
       renderSide();
       updateInspector();
     },
+    onMultiSelect(ids) {
+      selection = ids.length > 1 ? { kind: "multi", nodeIds: ids } : ids.length === 1 ? { kind: "node", nodeId: ids[0] } : { kind: "none" };
+      renderSide();
+      updateInspector();
+    },
+    onReorderLink(nodeId, linkIndex, dir) {
+      reorderLink(nodeId, linkIndex, dir);
+    },
     onContextMenu(ctx) {
       if (!model) return;
       if (ctx.kind === "node" && ctx.nodeId !== void 0) {
@@ -2806,7 +3067,10 @@
         const link = model.linksOf(model.nodeById(ctx.nodeId))[ctx.linkIndex];
         const condId = link ? model.getNum(link, "mConditionId") : 0;
         const hasCond = link ? model.getNum(link, "mExistCondition") === 1 : false;
+        const linkTotal = model.linksOf(model.nodeById(ctx.nodeId)).length;
         openContextMenu([
+          ...ctx.linkIndex > 0 ? [{ label: "↑ 上移（更早判定）", action: () => reorderLink(ctx.nodeId, ctx.linkIndex, -1) }] : [],
+          ...ctx.linkIndex < linkTotal - 1 ? [{ label: "↓ 下移（更晚判定）", action: () => reorderLink(ctx.nodeId, ctx.linkIndex, 1) }] : [],
           hasCond ? {
             label: `编辑条件 #${condId}`,
             action: () => {
@@ -2860,6 +3124,21 @@
       }
     }
   });
+  function reorderLink(nodeId, linkIndex, dir) {
+    const m2 = model;
+    if (!m2) return;
+    const node = m2.nodeById(nodeId);
+    if (!node) return;
+    const to = linkIndex + dir;
+    if (to < 0 || to >= m2.linksOf(node).length) return;
+    m2.snapshot();
+    m2.moveLink(node, linkIndex, to);
+    if (selection.kind === "link" && selection.nodeId === nodeId) {
+      if (selection.linkIndex === linkIndex) selection = { kind: "link", nodeId, linkIndex: to };
+      else if (selection.linkIndex === to) selection = { kind: "link", nodeId, linkIndex };
+    }
+    renderAll();
+  }
   function ensureChangeHook() {
     model.onChange = () => renderAll();
   }
@@ -2886,6 +3165,7 @@
           selection = sel;
         },
         requestRender: () => renderAll(),
+        reorderLink,
         selectNode: (id) => {
           graph.selectNode(id);
           selection = { kind: "node", nodeId: id };
@@ -2913,12 +3193,13 @@
     if (!m2) return;
     const tab = $("tabNodes").classList.contains("active") ? "nodes" : "conds";
     if (tab === "nodes") {
+      const multiSel = selection.kind === "multi" ? new Set(selection.nodeIds) : null;
       for (const nd of m2.nodes()) {
         const id = m2.getNum(nd, "mId");
         const name = m2.str(nd, "mName");
         if (search && !`${id} ${name} ${m2.nodeActionNo(nd) ?? ""}`.toLowerCase().includes(search)) continue;
         const r = document.createElement("div");
-        r.className = "nodeRow" + (selection.kind === "node" && selection.nodeId === id ? " sel" : "");
+        r.className = "nodeRow" + (selection.kind === "node" && selection.nodeId === id || multiSel?.has(id) ? " sel" : "");
         r.innerHTML = `<span class="nid">${id}</span><span class="nname">${escapeHtml2(name) || "<i>未命名</i>"}</span><span class="nact">${m2.nodeActionNo(nd) ?? "·"}</span><span class="ncnt">${m2.linksOf(nd).length}</span>`;
         r.addEventListener("click", () => {
           selection = { kind: "node", nodeId: id };
@@ -3093,6 +3374,17 @@
       $("search").focus();
       return;
     }
+    if ((e.key === "Delete" || e.key === "Backspace") && selection.kind === "multi") {
+      e.preventDefault();
+      const ids = [...selection.nodeIds];
+      if (!confirm(`删除选中的 ${ids.length} 个节点？指向它们的链接也会一并删除。`)) return;
+      model?.snapshot();
+      for (const id of ids) model?.deleteNode(id);
+      selection = { kind: "none" };
+      graph.clearSelection();
+      renderAll();
+      return;
+    }
     if (e.key === "f") graph.fit();
     if (e.key === "Escape") {
       selection = { kind: "none" };
@@ -3188,6 +3480,7 @@
   updateInspector();
   renderStatus();
   var w = window;
+  w["FSM_STUDIO_GRAPH"] = graph;
   w["FSM_STUDIO_LOAD"] = (name, b64) => {
     const bin = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
     try {

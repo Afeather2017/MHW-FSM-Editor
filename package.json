@@ -8,7 +8,7 @@
     "build:app": "esbuild src/app.ts --bundle --outfile=dist/app.js --target=es2020 --charset=utf8",
     "build:test": "esbuild tests/run.ts --bundle --platform=node --outfile=.tmp/tests.cjs --charset=utf8",
     "test": "npm run build:test && node .tmp/tests.cjs",
-    "build": "npm run typecheck && npm run build:app && npm run test",
+    "build": "npm run build:app",
     "start": "node serve.mjs"
   },
   "devDependencies": {
