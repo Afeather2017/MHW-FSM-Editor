@@ -1338,8 +1338,111 @@
     }
   }
 
-  // src/graph.ts
+  // src/card.ts
+  var HEADER_H = 24;
+  var ROW_H = 16;
+  var ROW_TOP = 2;
+  function textW(s) {
+    let w2 = 0;
+    for (const ch of s) w2 += ch.charCodeAt(0) > 11904 ? 11 : 6.5;
+    return w2;
+  }
+  function clip(s, maxW) {
+    let w2 = 0;
+    const chars = Array.from(s);
+    for (let i = 0; i < chars.length; i++) {
+      w2 += chars[i].charCodeAt(0) > 11904 ? 11 : 6.5;
+      if (w2 > maxW) return chars.slice(0, i).join("") + "…";
+    }
+    return s;
+  }
   var COLOR_PALETTE = ["#8a8f98", "#4f8ef7", "#e05555", "#e8c33a", "#54c46a", "#a86ee0", "#38c7d8", "#e08a3a"];
+  function condTagOf(model2, lk) {
+    const condId = model2.getNum(lk, "mConditionId");
+    const hasCond = model2.getNum(lk, "mExistCondition") === 1;
+    if (!hasCond) return "";
+    const tree = model2.conditions()[condId];
+    if (!tree) return `c${condId}`;
+    const sum = model2.conditionSummary(tree).replace(/^#\d+:\s*/, "");
+    return sum === "(空条件)" ? `c${condId}` : `c${condId} ${sum}`;
+  }
+  function condLines(tag) {
+    const head = tag.match(/^c\d+\s*/)?.[0] ?? "";
+    const rest = tag.slice(head.length);
+    const id = head.trim();
+    if (!rest) return id ? [id] : [];
+    const parts = rest.split(/ ([&|]) /);
+    const lines = [id ? `${id} ${parts[0]}` : parts[0]];
+    for (let i = 1; i + 1 < parts.length; i += 2) lines.push(`${parts[i]} ${parts[i + 1]}`);
+    return lines;
+  }
+  function lineOffsets(spans) {
+    const out = [];
+    let acc = 0;
+    for (const s of spans) {
+      out.push(acc);
+      acc += Math.max(1, s);
+    }
+    return out;
+  }
+  function rowNeed(text, lines) {
+    let need = textW(text) + textW(lines[0] ?? "") + 30;
+    for (let i = 1; i < lines.length; i++) need = Math.max(need, textW(lines[i]) + 24);
+    return need;
+  }
+  function measureCard(model2, nd, id, initId) {
+    const name = model2.str(nd, "mName") || `(id ${id})`;
+    const act = model2.nodeActionNo(nd);
+    const motion = model2.nodeMotionNo(nd);
+    const links = model2.linksOf(nd);
+    const isInit = id === initId;
+    const outRows = links.map((lk, i) => {
+      const dst = model2.getNum(lk, "mDestinationNodeId");
+      const cond = condTagOf(model2, lk);
+      return { idx: i, text: model2.str(lk, "mName") || `→ ${dst}`, cond, condLines: condLines(cond), dst };
+    });
+    const inRows = [];
+    for (const srcNode of model2.nodes()) {
+      const srcId = model2.getNum(srcNode, "mId");
+      model2.linksOf(srcNode).forEach((lk, lidx) => {
+        if (model2.getNum(lk, "mDestinationNodeId") !== id) return;
+        const cond = condTagOf(model2, lk);
+        inRows.push({ src: srcId, lidx, text: model2.str(srcNode, "mName") || `← ${srcId}`, cond, condLines: condLines(cond) });
+      });
+    }
+    const infoLines = [];
+    if (isInit) infoLines.push("▶初始");
+    if (act !== null) infoLines.push(`act ${act}`);
+    if (motion) infoLines.push(`mot ${motion.motion}${motion.phase ? `/p${motion.phase}` : ""}`);
+    infoLines.push(`#${id}`);
+    const OUT_MIN = 96;
+    const OUT_MAX = 330;
+    const IN_MIN = 60;
+    const IN_MAX = 240;
+    const CARD_MAX = 640;
+    const INFO_W = Math.max(56, ...infoLines.map((l) => textW(l) + 14));
+    const outW = outRows.length || links.length ? Math.max(OUT_MIN, Math.min(OUT_MAX, Math.max(...outRows.map((r) => rowNeed(r.text, r.condLines))))) : 0;
+    const inW = inRows.length ? Math.max(IN_MIN, Math.min(IN_MAX, Math.max(...inRows.map((r) => rowNeed(r.text, r.condLines))))) : 0;
+    const nameW = textW(name) + 22;
+    const W = Math.min(CARD_MAX, Math.max(216, nameW, inW + INFO_W + outW + 38));
+    const outLines = outRows.reduce((a, r) => a + Math.max(1, r.condLines.length), 0);
+    const inLines = inRows.reduce((a, r) => a + Math.max(1, r.condLines.length), 0);
+    const H = HEADER_H + Math.max(outLines, inLines, 3) * ROW_H + 12;
+    return {
+      w: W,
+      h: H,
+      colorIdx: model2.getNum(nd, "mColorType") % COLOR_PALETTE.length,
+      name,
+      isInit,
+      infoLines,
+      rows: outRows,
+      inRows,
+      inColW: inW,
+      outColW: outW
+    };
+  }
+
+  // src/graph.ts
   var COLOR_NAMES = ["灰", "蓝", "红", "黄", "绿", "紫", "青", "橙"];
   var GraphView = class {
     constructor(svg, cb) {
@@ -1590,8 +1693,17 @@
         if (!pos || !m2 || m2.outColW === 0) continue;
         const dx = w2.x - pos.x, dy = w2.y - pos.y;
         if (dx < m2.w + 4 || dx > m2.w + 32) continue;
-        const row2 = Math.floor((dy - 26) / 16);
-        if (row2 < 0 || dy > 26 + row2 * 16 + 14) continue;
+        const spans = m2.rows.map((r) => Math.max(1, r.condLines.length));
+        const offsets = lineOffsets(spans);
+        let row2 = -1;
+        for (let k = 0; k < spans.length; k++) {
+          const top = HEADER_H + ROW_TOP + offsets[k] * ROW_H;
+          if (dy >= top && dy <= top + spans[k] * ROW_H - 2) {
+            row2 = k;
+            break;
+          }
+        }
+        if (row2 < 0) continue;
         const linkCount = this.model.linksOf(nd).length;
         const dir = dx < m2.w + 17 ? -1 : 1;
         if (row2 >= linkCount) continue;
@@ -1919,7 +2031,12 @@
         cards.set(id, measureCard(model2, nd, id, initId));
       }
       this.cardMetrics = cards;
-      const rowY = (i) => 24 + 2 + i * 16 + 8;
+      const spansOf = (rows) => rows.map((r) => r.condLines.length);
+      const rowMidY = (spans, i) => {
+        let start = 0;
+        for (let k = 0; k < i; k++) start += Math.max(1, spans[k]);
+        return HEADER_H + ROW_TOP + (start + Math.max(1, spans[i]) / 2) * ROW_H;
+      };
       this.edgeLayer.innerHTML = "";
       for (const nd of model2.nodes()) {
         const id = model2.getNum(nd, "mId");
@@ -1933,12 +2050,12 @@
           const path = document.createElementNS(ns, "path");
           path.dataset["edge"] = `${id},${idx}`;
           const sx = a.x + sa.w;
-          const sy = a.y + rowY(idx);
+          const sy = a.y + rowMidY(spansOf(sa.rows), idx);
           let ty = sb ? sb.h / 2 : 28;
           let tx = b.x;
           if (sb) {
             const ir = sb.inRows.findIndex((r) => r.src === id && r.lidx === idx);
-            if (ir >= 0) ty = b.y + rowY(ir);
+            if (ir >= 0) ty = b.y + rowMidY(spansOf(sb.inRows), ir);
           }
           let d;
           if (id === dst) {
@@ -1958,8 +2075,6 @@
         });
       }
       this.nodeLayer.innerHTML = "";
-      const HEADER_H = 24;
-      const ROW_H = 16;
       for (const nd of model2.nodes()) {
         const id = model2.getNum(nd, "mId");
         const pos = this.nodePos(id);
@@ -2001,35 +2116,39 @@
         const listX = W - m2.outColW - 6;
         const inX = 8;
         const infoX = 8 + m2.inColW + 8;
+        const inBase = lineOffsets(m2.inRows.map((r) => r.condLines.length));
         m2.inRows.forEach((r, ri) => {
+          const span = Math.max(1, r.condLines.length);
+          const top = HEADER + ROW_TOP + inBase[ri] * ROW_H;
           const rg = document.createElementNS(ns, "g");
           rg.dataset["edge"] = `${r.src},${r.lidx}`;
           rg.setAttribute("class", "edgeRow");
           const hit = document.createElementNS(ns, "rect");
           hit.setAttribute("x", String(inX - 3));
-          hit.setAttribute("y", String(HEADER + 2 + ri * 16));
+          hit.setAttribute("y", String(top));
           hit.setAttribute("width", String(m2.inColW));
-          hit.setAttribute("height", "16");
+          hit.setAttribute("height", String(span * ROW_H));
           hit.setAttribute("rx", "3");
           hit.setAttribute("class", "edgeRowHit");
           rg.appendChild(hit);
           const t = document.createElementNS(ns, "text");
           t.setAttribute("x", String(inX));
-          t.setAttribute("y", String(HEADER + 13 + ri * 16));
+          t.setAttribute("y", String(top + 13));
           t.setAttribute("class", "edgeRowText inRowText");
-          t.textContent = clip(r.text, Math.max(34, m2.inColW - textW(r.cond) - 14));
+          t.textContent = clip(r.text, Math.max(34, m2.inColW - textW(r.condLines[0] ?? "") - 14));
           rg.appendChild(t);
-          if (r.cond) {
+          r.condLines.forEach((line, lj) => {
             const ct = document.createElementNS(ns, "text");
             ct.setAttribute("x", String(inX + m2.inColW - 2));
-            ct.setAttribute("y", String(HEADER + 13 + ri * 16));
+            ct.setAttribute("y", String(top + 13 + lj * ROW_H));
             ct.setAttribute("class", "edgeRowCond");
             ct.setAttribute("text-anchor", "end");
-            ct.textContent = clip(r.cond, m2.inColW * 0.6);
+            ct.textContent = clip(line, m2.inColW - 8);
             rg.appendChild(ct);
-          }
+          });
           const title = document.createElementNS(ns, "title");
-          title.textContent = `来自 ${r.src}`;
+          title.textContent = `来自 ${r.src}${r.cond ? `
+${r.cond}` : ""}`;
           rg.appendChild(title);
           g.appendChild(rg);
         });
@@ -2042,43 +2161,49 @@
           t.textContent = line;
           g.appendChild(t);
         });
+        const outBase = lineOffsets(m2.rows.map((r) => r.condLines.length));
         m2.rows.forEach((r) => {
+          const span = Math.max(1, r.condLines.length);
+          const top = HEADER + ROW_TOP + outBase[r.idx] * ROW_H;
           const rg = document.createElementNS(ns, "g");
           rg.dataset["edge"] = `${id},${r.idx}`;
           rg.setAttribute("class", "edgeRow" + (this.selectedLink?.nodeId === id && this.selectedLink?.linkIndex === r.idx ? " sel" : ""));
           const hit = document.createElementNS(ns, "rect");
           hit.setAttribute("x", String(listX - 4));
-          hit.setAttribute("y", String(HEADER + 2 + r.idx * ROW_H));
+          hit.setAttribute("y", String(top));
           hit.setAttribute("width", String(m2.outColW));
-          hit.setAttribute("height", String(ROW_H));
+          hit.setAttribute("height", String(span * ROW_H));
           hit.setAttribute("rx", "3");
           hit.setAttribute("class", "edgeRowHit");
           rg.appendChild(hit);
           const label = document.createElementNS(ns, "text");
           label.setAttribute("x", String(listX));
-          label.setAttribute("y", String(HEADER + 13 + r.idx * ROW_H));
+          label.setAttribute("y", String(top + 13));
           label.setAttribute("class", "edgeRowText");
           const rowW = m2.outColW;
-          let condShown = r.cond;
-          let labelMax = rowW - textW(condShown) - 10;
-          if (r.cond && labelMax < 40) {
-            condShown = r.cond.split(" ")[0];
-            labelMax = rowW - textW(condShown) - 10;
+          let firstLine = r.condLines[0] ?? "";
+          let labelMax = rowW - textW(firstLine) - 10;
+          if (firstLine && labelMax < 40) {
+            firstLine = firstLine.split(" ")[0];
+            labelMax = rowW - textW(firstLine) - 10;
           }
           label.textContent = clip(r.text, Math.max(30, labelMax));
           rg.appendChild(label);
-          if (condShown) {
-            const condT = document.createElementNS(ns, "text");
-            condT.setAttribute("x", String(W - 6));
-            condT.setAttribute("y", String(HEADER + 13 + r.idx * ROW_H));
-            condT.setAttribute("class", "edgeRowCond");
-            condT.setAttribute("text-anchor", "end");
-            condT.textContent = clip(condShown, rowW * 0.6);
-            rg.appendChild(condT);
+          if (firstLine) {
+            const condLines2 = [firstLine, ...r.condLines.slice(1)];
+            condLines2.forEach((line, lj) => {
+              const condT = document.createElementNS(ns, "text");
+              condT.setAttribute("x", String(W - 6));
+              condT.setAttribute("y", String(top + 13 + lj * ROW_H));
+              condT.setAttribute("class", "edgeRowCond");
+              condT.setAttribute("text-anchor", "end");
+              condT.textContent = clip(line, rowW - 12);
+              rg.appendChild(condT);
+            });
           } else {
             const arrow = document.createElementNS(ns, "text");
             arrow.setAttribute("x", String(W - 8));
-            arrow.setAttribute("y", String(HEADER + 13 + r.idx * ROW_H));
+            arrow.setAttribute("y", String(top + 13));
             arrow.setAttribute("class", "edgeRowArrow");
             arrow.setAttribute("text-anchor", "end");
             arrow.textContent = "→";
@@ -2095,15 +2220,15 @@
             btn2.setAttribute("class", "rowReorder");
             const hitR = document.createElementNS(ns, "rect");
             hitR.setAttribute("x", String(gx - 2));
-            hitR.setAttribute("y", String(HEADER + 2 + r.idx * ROW_H));
+            hitR.setAttribute("y", String(top));
             hitR.setAttribute("width", "14");
-            hitR.setAttribute("height", "14");
+            hitR.setAttribute("height", String(span * ROW_H - 2));
             hitR.setAttribute("rx", "3");
             hitR.setAttribute("class", "rowReorderHit");
             btn2.appendChild(hitR);
             const arrow = document.createElementNS(ns, "text");
             arrow.setAttribute("x", String(gx + 5));
-            arrow.setAttribute("y", String(HEADER + 13 + r.idx * ROW_H));
+            arrow.setAttribute("y", String(top + 13));
             arrow.setAttribute("text-anchor", "middle");
             arrow.setAttribute("class", "rowReorderArrow");
             arrow.textContent = dir < 0 ? "↑" : "↓";
@@ -2119,77 +2244,6 @@
       }
     }
   };
-  function textW(s) {
-    let w2 = 0;
-    for (const ch of s) w2 += ch.charCodeAt(0) > 11904 ? 11 : 6.5;
-    return w2;
-  }
-  function condTagOf(model2, lk) {
-    const condId = model2.getNum(lk, "mConditionId");
-    const hasCond = model2.getNum(lk, "mExistCondition") === 1;
-    if (!hasCond) return "";
-    let cond = `c${condId}`;
-    if (model2.conditions()[condId]) {
-      const sum = model2.conditionSummary(model2.conditions()[condId]).replace(/^#\d+:\s*/, "");
-      const props = sum === "(空条件)" ? "" : sum.slice(0, 12);
-      if (props) cond += " " + props;
-    }
-    return cond;
-  }
-  function measureCard(model2, nd, id, initId) {
-    const name = model2.str(nd, "mName") || `(id ${id})`;
-    const act = model2.nodeActionNo(nd);
-    const motion = model2.nodeMotionNo(nd);
-    const links = model2.linksOf(nd);
-    const isInit = id === initId;
-    const outRows = links.map((lk, i) => {
-      const dst = model2.getNum(lk, "mDestinationNodeId");
-      return { idx: i, text: model2.str(lk, "mName") || `→ ${dst}`, cond: condTagOf(model2, lk), dst };
-    });
-    const inRows = [];
-    for (const srcNode of model2.nodes()) {
-      const srcId = model2.getNum(srcNode, "mId");
-      model2.linksOf(srcNode).forEach((lk, lidx) => {
-        if (model2.getNum(lk, "mDestinationNodeId") !== id) return;
-        inRows.push({ src: srcId, lidx, text: model2.str(srcNode, "mName") || `← ${srcId}`, cond: condTagOf(model2, lk) });
-      });
-    }
-    const infoLines = [];
-    if (isInit) infoLines.push("▶初始");
-    if (act !== null) infoLines.push(`act ${act}`);
-    if (motion) infoLines.push(`mot ${motion.motion}${motion.phase ? `/p${motion.phase}` : ""}`);
-    infoLines.push(`#${id}`);
-    const OUT_MIN = 96;
-    const IN_MIN = 48;
-    const INFO_W = Math.max(56, ...infoLines.map((l) => textW(l) + 14));
-    const outW = outRows.length || links.length ? Math.max(OUT_MIN, Math.min(190, outRows.length ? Math.max(...outRows.map((r) => textW(r.text) + textW(r.cond) + 30)) : OUT_MIN)) : 0;
-    const inW = inRows.length ? Math.max(60, Math.min(170, Math.max(...inRows.map((r) => textW(r.text) + textW(r.cond) + 30)))) : 0;
-    const nameW = textW(name) + 22;
-    const W = Math.min(470, Math.max(216, nameW, inW + INFO_W + outW + 38));
-    const listRows = Math.max(outRows.length, inRows.length, 3);
-    const H = 24 + listRows * 16 + 12;
-    return {
-      w: W,
-      h: H,
-      colorIdx: model2.getNum(nd, "mColorType") % COLOR_PALETTE.length,
-      name,
-      isInit,
-      infoLines,
-      rows: outRows,
-      inRows,
-      inColW: inW,
-      outColW: outW
-    };
-  }
-  function clip(s, maxW) {
-    let w2 = 0;
-    const chars = Array.from(s);
-    for (let i = 0; i < chars.length; i++) {
-      w2 += chars[i].charCodeAt(0) > 11904 ? 11 : 6.5;
-      if (w2 > maxW) return chars.slice(0, i).join("") + "…";
-    }
-    return s;
-  }
   function avg(xs) {
     return xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : 1e9;
   }

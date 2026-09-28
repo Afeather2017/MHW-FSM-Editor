@@ -1,6 +1,11 @@
 // SVG graph view: pan/zoom canvas, node cards, condition-labeled edges.
+// Card geometry (sizes, row stacking, condition-line splitting) lives in
+// card.ts so the auto layout and tests share it.
 import { FsmModel } from './model';
 import { XfsInstance } from './xfs';
+import { CardMetrics, COLOR_PALETTE, HEADER_H, ROW_H, ROW_TOP, clip, lineOffsets, measureCard, textW } from './card';
+
+export { COLOR_PALETTE };
 
 export interface Point { x: number; y: number; }
 
@@ -34,9 +39,8 @@ export interface GraphCallbacks {
 
 
 
-/** card header colors, indexed by mColorType % length (the .fsm's own
- *  node-color field, so painted colors persist inside the saved .fsm) */
-export const COLOR_PALETTE = ['#8a8f98', '#4f8ef7', '#e05555', '#e8c33a', '#54c46a', '#a86ee0', '#38c7d8', '#e08a3a'];
+/** card header colors: palette lives in card.ts (shared with layout);
+ *  display names here */
 export const COLOR_NAMES = ['灰', '蓝', '红', '黄', '绿', '紫', '青', '橙'];
 
 export class GraphView {
@@ -319,8 +323,15 @@ export class GraphView {
       if (!pos || !m || m.outColW === 0) continue;
       const dx = w.x - pos.x, dy = w.y - pos.y;
       if (dx < m.w + 4 || dx > m.w + 32) continue;
-      const row = Math.floor((dy - 26) / 16);
-      if (row < 0 || dy > 26 + row * 16 + 14) continue;
+      // locate the out-row block containing dy (rows may span several lines)
+      const spans = m.rows.map((r) => Math.max(1, r.condLines.length));
+      const offsets = lineOffsets(spans);
+      let row = -1;
+      for (let k = 0; k < spans.length; k++) {
+        const top = HEADER_H + ROW_TOP + offsets[k] * ROW_H;
+        if (dy >= top && dy <= top + spans[k] * ROW_H - 2) { row = k; break; }
+      }
+      if (row < 0) continue;
       const linkCount = this.model.linksOf(nd).length;
       const dir: -1 | 1 = dx < m.w + 17 ? -1 : 1;
       if (row >= linkCount) continue;
@@ -667,8 +678,14 @@ export class GraphView {
     this.cardMetrics = cards;
 
     // edges — anchored per row: start at the out-row's right edge on the
-    // source card, end at the matching in-row's left edge on the target card
-    const rowY = (i: number): number => 24 + 2 + i * 16 + 8;
+    // source card, end at the matching in-row's left edge on the target card.
+    // Rows with multi-line conditions anchor at the middle of the whole block.
+    const spansOf = (rows: { condLines: string[] }[]): number[] => rows.map((r) => r.condLines.length);
+    const rowMidY = (spans: number[], i: number): number => {
+      let start = 0;
+      for (let k = 0; k < i; k++) start += Math.max(1, spans[k]);
+      return HEADER_H + ROW_TOP + (start + Math.max(1, spans[i]) / 2) * ROW_H;
+    };
     this.edgeLayer.innerHTML = '';
     for (const nd of model.nodes()) {
       const id = model.getNum(nd, 'mId');
@@ -685,13 +702,13 @@ export class GraphView {
         path.dataset['edge'] = `${id},${idx}`;
         // start: right edge of the source's out-row
         const sx = a.x + sa.w;
-        const sy = a.y + rowY(idx);
+        const sy = a.y + rowMidY(spansOf(sa.rows), idx);
         // end: left edge of the target's matching in-row
         let ty = sb ? sb.h / 2 : 28;
         let tx = b.x;
         if (sb) {
           const ir = sb.inRows.findIndex((r) => r.src === id && r.lidx === idx);
-          if (ir >= 0) ty = b.y + rowY(ir);
+          if (ir >= 0) ty = b.y + rowMidY(spansOf(sb.inRows), ir);
         }
         let d: string;
         if (id === dst) {
@@ -713,8 +730,6 @@ export class GraphView {
 
     // nodes — variable-size cards: colored header, info column, out-link list
     this.nodeLayer.innerHTML = '';
-    const HEADER_H = 24;
-    const ROW_H = 16;
     for (const nd of model.nodes()) {
       const id = model.getNum(nd, 'mId');
       const pos = this.nodePos(id);
@@ -763,36 +778,39 @@ export class GraphView {
       const inX = 8;
       const infoX = 8 + m.inColW + 8;
 
-      // in-edge rows (left column)
+      // in-edge rows (left column); condition operands stack onto extra lines
+      const inBase = lineOffsets(m.inRows.map((r) => r.condLines.length));
       m.inRows.forEach((r, ri) => {
+        const span = Math.max(1, r.condLines.length);
+        const top = HEADER + ROW_TOP + inBase[ri] * ROW_H;
         const rg = document.createElementNS(ns, 'g');
         rg.dataset['edge'] = `${r.src},${r.lidx}`;
         rg.setAttribute('class', 'edgeRow');
         const hit = document.createElementNS(ns, 'rect');
         hit.setAttribute('x', String(inX - 3));
-        hit.setAttribute('y', String(HEADER + 2 + ri * 16));
+        hit.setAttribute('y', String(top));
         hit.setAttribute('width', String(m.inColW));
-        hit.setAttribute('height', '16');
+        hit.setAttribute('height', String(span * ROW_H));
         hit.setAttribute('rx', '3');
         hit.setAttribute('class', 'edgeRowHit');
         rg.appendChild(hit);
         const t = document.createElementNS(ns, 'text');
         t.setAttribute('x', String(inX));
-        t.setAttribute('y', String(HEADER + 13 + ri * 16));
+        t.setAttribute('y', String(top + 13));
         t.setAttribute('class', 'edgeRowText inRowText');
-        t.textContent = clip(r.text, Math.max(34, m.inColW - textW(r.cond) - 14));
+        t.textContent = clip(r.text, Math.max(34, m.inColW - textW(r.condLines[0] ?? '') - 14));
         rg.appendChild(t);
-        if (r.cond) {
+        r.condLines.forEach((line, lj) => {
           const ct = document.createElementNS(ns, 'text');
           ct.setAttribute('x', String(inX + m.inColW - 2));
-          ct.setAttribute('y', String(HEADER + 13 + ri * 16));
+          ct.setAttribute('y', String(top + 13 + lj * ROW_H));
           ct.setAttribute('class', 'edgeRowCond');
           ct.setAttribute('text-anchor', 'end');
-          ct.textContent = clip(r.cond, m.inColW * 0.6);
+          ct.textContent = clip(line, m.inColW - 8);
           rg.appendChild(ct);
-        }
+        });
         const title = document.createElementNS(ns, 'title');
-        title.textContent = `来自 ${r.src}`;
+        title.textContent = `来自 ${r.src}${r.cond ? `\n${r.cond}` : ''}`;
         rg.appendChild(title);
         g.appendChild(rg);
       });
@@ -807,44 +825,51 @@ export class GraphView {
         t.textContent = line;
         g.appendChild(t);
       });
+      const outBase = lineOffsets(m.rows.map((r) => r.condLines.length));
       m.rows.forEach((r) => {
+        const span = Math.max(1, r.condLines.length);
+        const top = HEADER + ROW_TOP + outBase[r.idx] * ROW_H;
         const rg = document.createElementNS(ns, 'g');
         rg.dataset['edge'] = `${id},${r.idx}`;
         rg.setAttribute('class', 'edgeRow' + (this.selectedLink?.nodeId === id && this.selectedLink?.linkIndex === r.idx ? ' sel' : ''));
         const hit = document.createElementNS(ns, 'rect');
         hit.setAttribute('x', String(listX - 4));
-        hit.setAttribute('y', String(HEADER + 2 + r.idx * ROW_H));
+        hit.setAttribute('y', String(top));
         hit.setAttribute('width', String(m.outColW));
-        hit.setAttribute('height', String(ROW_H));
+        hit.setAttribute('height', String(span * ROW_H));
         hit.setAttribute('rx', '3');
         hit.setAttribute('class', 'edgeRowHit');
         rg.appendChild(hit);
         const label = document.createElementNS(ns, 'text');
         label.setAttribute('x', String(listX));
-        label.setAttribute('y', String(HEADER + 13 + r.idx * ROW_H));
+        label.setAttribute('y', String(top + 13));
         label.setAttribute('class', 'edgeRowText');
-        // split row width between link name and condition tag; the name wins
+        // split row width between link name and condition tag; the name wins.
+        // Only line 0 shares with the name — later operand lines stand alone.
         const rowW = m.outColW;
-        let condShown = r.cond;
-        let labelMax = rowW - textW(condShown) - 10;
-        if (r.cond && labelMax < 40) {
-          condShown = r.cond.split(' ')[0]; // keep just cN
-          labelMax = rowW - textW(condShown) - 10;
+        let firstLine = r.condLines[0] ?? '';
+        let labelMax = rowW - textW(firstLine) - 10;
+        if (firstLine && labelMax < 40) {
+          firstLine = firstLine.split(' ')[0]; // keep just cN on the shared line
+          labelMax = rowW - textW(firstLine) - 10;
         }
         label.textContent = clip(r.text, Math.max(30, labelMax));
         rg.appendChild(label);
-        if (condShown) {
-          const condT = document.createElementNS(ns, 'text');
-          condT.setAttribute('x', String(W - 6));
-          condT.setAttribute('y', String(HEADER + 13 + r.idx * ROW_H));
-          condT.setAttribute('class', 'edgeRowCond');
-          condT.setAttribute('text-anchor', 'end');
-          condT.textContent = clip(condShown, rowW * 0.6);
-          rg.appendChild(condT);
+        if (firstLine) {
+          const condLines = [firstLine, ...r.condLines.slice(1)];
+          condLines.forEach((line, lj) => {
+            const condT = document.createElementNS(ns, 'text');
+            condT.setAttribute('x', String(W - 6));
+            condT.setAttribute('y', String(top + 13 + lj * ROW_H));
+            condT.setAttribute('class', 'edgeRowCond');
+            condT.setAttribute('text-anchor', 'end');
+            condT.textContent = clip(line, rowW - 12);
+            rg.appendChild(condT);
+          });
         } else {
           const arrow = document.createElementNS(ns, 'text');
           arrow.setAttribute('x', String(W - 8));
-          arrow.setAttribute('y', String(HEADER + 13 + r.idx * ROW_H));
+          arrow.setAttribute('y', String(top + 13));
           arrow.setAttribute('class', 'edgeRowArrow');
           arrow.setAttribute('text-anchor', 'end');
           arrow.textContent = '→';
@@ -863,15 +888,15 @@ export class GraphView {
           btn.setAttribute('class', 'rowReorder');
           const hitR = document.createElementNS(ns, 'rect');
           hitR.setAttribute('x', String(gx - 2));
-          hitR.setAttribute('y', String(HEADER + 2 + r.idx * ROW_H));
+          hitR.setAttribute('y', String(top));
           hitR.setAttribute('width', '14');
-          hitR.setAttribute('height', '14');
+          hitR.setAttribute('height', String(span * ROW_H - 2));
           hitR.setAttribute('rx', '3');
           hitR.setAttribute('class', 'rowReorderHit');
           btn.appendChild(hitR);
           const arrow = document.createElementNS(ns, 'text');
           arrow.setAttribute('x', String(gx + 5));
-          arrow.setAttribute('y', String(HEADER + 13 + r.idx * ROW_H));
+          arrow.setAttribute('y', String(top + 13));
           arrow.setAttribute('text-anchor', 'middle');
           arrow.setAttribute('class', 'rowReorderArrow');
           arrow.textContent = dir < 0 ? '↑' : '↓';
@@ -890,94 +915,6 @@ export class GraphView {
   }
 }
 
-interface CardMetrics {
-  w: number;
-  h: number;
-  colorIdx: number;
-  name: string;
-  isInit: boolean;
-  infoLines: string[];
-  rows: { idx: number; text: string; cond: string; dst: number }[];
-  inRows: { src: number; lidx: number; text: string; cond: string }[];
-  inColW: number;
-  outColW: number;
-}
-
-function textW(s: string): number {
-  let w = 0;
-  for (const ch of s) w += ch.charCodeAt(0) > 0x2e80 ? 11 : 6.5;
-  return w;
-}
-
-const MAX_LIST_ROWS = 12;
-
-function condTagOf(model: FsmModel, lk: XfsInstance): string {
-  const condId = model.getNum(lk, 'mConditionId');
-  const hasCond = model.getNum(lk, 'mExistCondition') === 1;
-  if (!hasCond) return '';
-  let cond = `c${condId}`;
-  if (model.conditions()[condId]) {
-    const sum = model.conditionSummary(model.conditions()[condId]).replace(/^#\d+:\s*/, '');
-    const props = sum === '(空条件)' ? '' : sum.slice(0, 12);
-    if (props) cond += ' ' + props;
-  }
-  return cond;
-}
-
-function measureCard(model: FsmModel, nd: XfsInstance, id: number, initId: number): CardMetrics {
-  const name = model.str(nd, 'mName') || `(id ${id})`;
-  const act = model.nodeActionNo(nd);
-  const motion = model.nodeMotionNo(nd);
-  const links = model.linksOf(nd);
-  const isInit = id === initId;
-  const outRows = links.map((lk, i) => {
-    const dst = model.getNum(lk, 'mDestinationNodeId');
-    return { idx: i, text: model.str(lk, 'mName') || `→ ${dst}`, cond: condTagOf(model, lk), dst };
-  });
-
-  // in-edges: one row per incoming link (source name + condition), all shown
-  const inRows: { src: number; lidx: number; text: string; cond: string }[] = [];
-  for (const srcNode of model.nodes()) {
-    const srcId = model.getNum(srcNode, 'mId');
-    model.linksOf(srcNode).forEach((lk, lidx) => {
-      if (model.getNum(lk, 'mDestinationNodeId') !== id) return;
-      inRows.push({ src: srcId, lidx, text: model.str(srcNode, 'mName') || `← ${srcId}`, cond: condTagOf(model, lk) });
-    });
-  }
-
-  const infoLines: string[] = [];
-  if (isInit) infoLines.push('▶初始');
-  if (act !== null) infoLines.push(`act ${act}`);
-  if (motion) infoLines.push(`mot ${motion.motion}${motion.phase ? `/p${motion.phase}` : ''}`);
-  infoLines.push(`#${id}`);
-
-  const OUT_MIN = 96;
-  const IN_MIN = 48;
-  const INFO_W = Math.max(56, ...infoLines.map((l) => textW(l) + 14));
-  const outW = outRows.length || links.length
-    ? Math.max(OUT_MIN, Math.min(190, outRows.length ? Math.max(...outRows.map((r) => textW(r.text) + textW(r.cond) + 30)) : OUT_MIN))
-    : 0;
-  const inW = inRows.length
-    ? Math.max(60, Math.min(170, Math.max(...inRows.map((r) => textW(r.text) + textW(r.cond) + 30))))
-    : 0;
-  const nameW = textW(name) + 22;
-  // columns: [8 + inColW + 8 | INFO_W | gap | outColW + 6] — pad so info text
-  // never runs into the out column
-  const W = Math.min(470, Math.max(216, nameW, inW + INFO_W + outW + 38));
-  const listRows = Math.max(outRows.length, inRows.length, 3);
-  const H = 24 + listRows * 16 + 12;
-  return {
-    w: W,
-    h: H,
-    colorIdx: model.getNum(nd, 'mColorType') % COLOR_PALETTE.length,
-    name, isInit, infoLines,
-    rows: outRows,
-    inRows,
-    inColW: inW,
-    outColW: outW,
-  };
-}
-
 function countInbound(model: FsmModel, id: number): number {
   let n = 0;
   for (const srcNode of model.nodes()) {
@@ -988,15 +925,6 @@ function countInbound(model: FsmModel, id: number): number {
   return n;
 }
 
-function clip(s: string, maxW: number): string {
-  let w = 0;
-  const chars = Array.from(s);
-  for (let i = 0; i < chars.length; i++) {
-    w += chars[i].charCodeAt(0) > 0x2e80 ? 11 : 6.5;
-    if (w > maxW) return chars.slice(0, i).join('') + '…';
-  }
-  return s;
-}
 function avg(xs: number[]): number {
   return xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : 1e9;
 }

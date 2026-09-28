@@ -4,6 +4,7 @@ import * as fs from 'fs';
 import { parseXfs, writeXfs, XfsDoc, XfsInstance, isInstance } from '../src/xfs';
 import { parseMtXml, writeMtXml } from '../src/fsmxml';
 import { FsmModel } from '../src/model';
+import { condLines, measureCard, textW } from '../src/card';
 
 let pass = 0, fail = 0;
 function check(name: string, cond: boolean, detail = ''): void {
@@ -231,6 +232,43 @@ console.log('== link reorder (priority order) ==');
   const nd2 = m.nodes().find((n) => m.getNum(n, 'mId') === nid)!;
   check('reorder: undo restores order',
     nameOf(m.linksOf(nd2)[0]) === nameOf(l0) && nameOf(m.linksOf(nd2)[1]) === nameOf(l1));
+}
+
+console.log('== card geometry: full multi-line condition display ==');
+{
+  const m = FsmModel.fromBinary(fs.readFileSync(DEPLOYED), 'wp03_action.fsm');
+  const nd = m.nodes().find((n) => m.linksOf(n).some((lk) => m.getNum(lk, 'mConditionId') === 116))!;
+  const card = measureCard(m, nd, m.getNum(nd, 'mId'), m.initialStateId());
+
+  // c116: "R & 練気ゲージ判定(気刃斬りIII" — the tag keeps the full summary
+  const row116 = card.rows.find((r) => r.cond.startsWith('c116'))!;
+  check('card: c116 summary not truncated',
+    row116.cond === 'c116 R & 練気ゲージ判定(気刃斬りIII', row116.cond);
+  check('card: c116 wraps at & into 2 lines',
+    row116.condLines.length === 2 && row116.condLines[0] === 'c116 R'
+    && row116.condLines[1] === '& 練気ゲージ判定(気刃斬りIII',
+    row116.condLines.join(' / '));
+  check('card: link name kept whole', row116.text.includes('t0001') && !row116.text.includes('…'), row116.text);
+
+  // single-operand conditions stay on one line
+  check('card: single-operand row stays 1 line', card.rows.some((r) => r.cond !== '' && r.condLines.length === 1));
+
+  // out column is wide enough for every row (name + line 0, or any continuation)
+  const need = Math.max(...card.rows.map((r) => Math.max(
+    textW(r.text) + textW(r.condLines[0] ?? '') + 30,
+    ...r.condLines.slice(1).map((l) => textW(l) + 24))));
+  check('card: outColW fits full rows', card.outColW >= need, `${card.outColW} < ${need}`);
+
+  // card height covers the stacked condition lines (out and in columns alike)
+  const outLines = card.rows.reduce((a, r) => a + Math.max(1, r.condLines.length), 0);
+  const inLines = card.inRows.reduce((a, r) => a + Math.max(1, r.condLines.length), 0);
+  check('card: height covers stacked lines',
+    card.h === 24 + Math.max(outLines, inLines, 3) * 16 + 12, String(card.h));
+
+  // OR conditions split at | the same way
+  const orTag = 'c9 A | B';
+  check('card: OR splits at |', JSON.stringify(condLines(orTag)) === JSON.stringify(['c9 A', '| B']), condLines(orTag).join(' / '));
+  check('card: bare id line', JSON.stringify(condLines('c12')) === JSON.stringify(['c12']));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
