@@ -3303,7 +3303,13 @@ ${r.cond}` : ""}`;
   function ensureChangeHook() {
     model.onChange = () => renderAll();
   }
+  var LIVE_RENDER_DELAY = 3e3;
+  var liveRenderTimer = null;
   function renderAll() {
+    if (liveRenderTimer !== null) {
+      clearTimeout(liveRenderTimer);
+      liveRenderTimer = null;
+    }
     $("fileLabel").textContent = model ? `${model.fileName || "(未保存)"} [${model.format === "binary" ? "fsm" : "xml"}]` : "未打开文件";
     $("dirtyBadge").textContent = model?.dirty ? "● 未保存" : "";
     btn("btnSave").disabled = !model;
@@ -3329,12 +3335,19 @@ ${r.cond}` : ""}`;
         },
         requestRender: () => renderAll(),
         // live-typing refresh: graph + sidebar + dirty badge only — rebuilding
-        // the inspector here would steal focus from the field being typed in
+        // the inspector here would steal focus from the field being typed in.
+        // The redraw itself is debounced: typing fires one redraw after the
+        // user stops (LIVE_RENDER_DELAY), not one per keystroke.
         requestLiveRefresh: () => {
           if (!model) return;
           $("dirtyBadge").textContent = model.dirty ? "● 未保存" : "";
-          graph.render();
-          renderSide();
+          if (liveRenderTimer !== null) clearTimeout(liveRenderTimer);
+          liveRenderTimer = setTimeout(() => {
+            liveRenderTimer = null;
+            if (!model) return;
+            graph.render();
+            renderSide();
+          }, LIVE_RENDER_DELAY);
         },
         reorderLink,
         selectNode: (id) => {
