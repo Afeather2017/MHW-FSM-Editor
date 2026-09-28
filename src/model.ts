@@ -50,12 +50,15 @@ export class FsmModel {
 
   // ----- undo / redo -------------------------------------------------------
 
+  /** push the current state onto the undo stack. Fires no change event: this
+   *  runs BEFORE a mutation, and every caller re-renders after mutating —
+   *  rendering the pre-mutation state here would rebuild UI mid-edit (and
+   *  steal input focus). onChange is for state restorations (undo/redo). */
   snapshot(): void {
     this.undoStack.push(JSON.stringify(this.doc.root));
     if (this.undoStack.length > 200) this.undoStack.shift();
     this.redoStack = [];
     this.dirty = true;
-    this.onChange?.();
   }
 
   canUndo(): boolean { return this.undoStack.length > 0; }

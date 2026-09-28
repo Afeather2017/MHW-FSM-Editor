@@ -393,6 +393,14 @@ function updateInspector(): void {
       selection,
       setSelection: (sel) => { selection = sel; },
       requestRender: () => renderAll(),
+      // live-typing refresh: graph + sidebar + dirty badge only — rebuilding
+      // the inspector here would steal focus from the field being typed in
+      requestLiveRefresh: () => {
+        if (!model) return;
+        $('dirtyBadge').textContent = model.dirty ? '● 未保存' : '';
+        graph.render();
+        renderSide();
+      },
       reorderLink,
       selectNode: (id) => {
         graph.selectNode(id);

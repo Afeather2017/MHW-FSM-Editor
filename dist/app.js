@@ -876,12 +876,15 @@
       return writeMtXml(this.doc);
     }
     // ----- undo / redo -------------------------------------------------------
+    /** push the current state onto the undo stack. Fires no change event: this
+     *  runs BEFORE a mutation, and every caller re-renders after mutating —
+     *  rendering the pre-mutation state here would rebuild UI mid-edit (and
+     *  steal input focus). onChange is for state restorations (undo/redo). */
     snapshot() {
       this.undoStack.push(JSON.stringify(this.doc.root));
       if (this.undoStack.length > 200) this.undoStack.shift();
       this.redoStack = [];
       this.dirty = true;
-      this.onChange?.();
     }
     canUndo() {
       return this.undoStack.length > 0;
@@ -2322,21 +2325,47 @@ ${r.cond}` : ""}`;
     box.appendChild(r);
     return r;
   }
-  function numInput(r, value, onChange, opts = {}) {
+  function wireEditing(input, m2, host, apply, liveValue) {
+    let armed = true;
+    const begin = () => {
+      if (armed) {
+        m2.snapshot();
+        armed = false;
+      }
+    };
+    input.addEventListener("input", () => {
+      if (liveValue && !liveValue()) return;
+      begin();
+      apply();
+      host.requestLiveRefresh();
+    });
+    input.addEventListener("change", () => {
+      begin();
+      apply();
+      host.requestRender();
+    });
+  }
+  function numInput(r, m2, host, value, apply, opts = {}) {
     const input = document.createElement("input");
     input.type = "number";
     input.value = String(value);
     input.step = String(opts.step ?? 1);
     if (opts.wide) input.className = "wide";
-    input.addEventListener("change", () => onChange(Math.trunc(Number(input.value) || 0)));
+    wireEditing(
+      input,
+      m2,
+      host,
+      () => apply(Math.trunc(Number(input.value) || 0)),
+      () => input.value.trim() !== "" && !Number.isNaN(Number(input.value))
+    );
     r.appendChild(input);
     return input;
   }
-  function textInput(r, value, onChange, datalist) {
+  function textInput(r, m2, host, value, apply, datalist) {
     const input = document.createElement("input");
     input.type = "text";
     input.value = value;
-    input.addEventListener("change", () => onChange(input.value));
+    wireEditing(input, m2, host, () => apply(input.value));
     if (datalist) {
       const dl = document.createElement("datalist");
       dl.id = `dl-${Math.random().toString(36).slice(2)}`;
@@ -2394,22 +2423,14 @@ ${r.cond}` : ""}`;
     const r = m2.doc.root;
     const box = section(root, "FSM 根属性 (rAIFSM)");
     let rowEl = row(box, "mOwnerObjectName");
-    textInput(rowEl, m2.str(r, "mOwnerObjectName"), (v) => {
-      m2.snapshot();
+    textInput(rowEl, m2, host, m2.str(r, "mOwnerObjectName"), (v) => {
       m2.setField(r, "mOwnerObjectName", v);
       m2.doc.rootName = v;
-      host.requestRender();
     });
     rowEl = row(box, "mQuality");
-    numInput(rowEl, m2.getNum(r, "mQuality"), (v) => {
-      m2.snapshot();
-      m2.setField(r, "mQuality", v);
-    });
+    numInput(rowEl, m2, host, m2.getNum(r, "mQuality"), (v) => m2.setField(r, "mQuality", v));
     rowEl = row(box, "mFSMAttribute");
-    numInput(rowEl, m2.getNum(r, "mFSMAttribute"), (v) => {
-      m2.snapshot();
-      m2.setField(r, "mFSMAttribute", v);
-    });
+    numInput(rowEl, m2, host, m2.getNum(r, "mFSMAttribute"), (v) => m2.setField(r, "mFSMAttribute", v));
     rowEl = row(box, "初始状态节点");
     const select = document.createElement("select");
     for (const nd of m2.nodes()) {
@@ -2461,29 +2482,14 @@ ${r.cond}` : ""}`;
     }
     const title = section(root, `节点 ${nodeId} — ${m2.str(node, "mName") || "(未命名)"}`);
     let r = row(title, "名称 mName");
-    textInput(r, m2.str(node, "mName"), (v) => {
-      m2.snapshot();
-      m2.setField(node, "mName", v);
-      host.requestRender();
-    });
+    textInput(r, m2, host, m2.str(node, "mName"), (v) => m2.setField(node, "mName", v));
     const motion = m2.nodeMotionNo(node);
     r = row(title, "ActionNo（动作号）");
-    numInput(r, m2.nodeActionNo(node) ?? -1, (v) => {
-      m2.snapshot();
-      m2.setNodeActionNo(node, v);
-      host.requestRender();
-    }, { wide: true });
+    numInput(r, m2, host, m2.nodeActionNo(node) ?? -1, (v) => m2.setNodeActionNo(node, v), { wide: true });
     r = row(title, "MotionNo（动作号）");
-    numInput(r, motion?.motion ?? -1, (v) => {
-      m2.snapshot();
-      m2.setNodeMotionNo(node, v, motion?.phase ?? -1);
-      host.requestRender();
-    }, { wide: true });
+    numInput(r, m2, host, motion?.motion ?? -1, (v) => m2.setNodeMotionNo(node, v, motion?.phase ?? -1), { wide: true });
     r = row(title, "MotionNo_Phase1");
-    numInput(r, motion?.phase ?? -1, (v) => {
-      m2.snapshot();
-      m2.setNodeMotionNo(node, motion?.motion ?? 0, v);
-    });
+    numInput(r, m2, host, motion?.phase ?? -1, (v) => m2.setNodeMotionNo(node, motion?.motion ?? 0, v));
     r = row(title, "mUniqueId");
     const ro = document.createElement("span");
     ro.textContent = String(m2.getNum(node, "mUniqueId"));
@@ -2496,21 +2502,11 @@ ${r.cond}` : ""}`;
       host.requestRender();
     }));
     r = row(title, "mColorType");
-    numInput(r, m2.getNum(node, "mColorType"), (v) => {
-      m2.snapshot();
-      m2.setField(node, "mColorType", v);
-      host.requestRender();
-    });
+    numInput(r, m2, host, m2.getNum(node, "mColorType"), (v) => m2.setField(node, "mColorType", v));
     r = row(title, "mSetting");
-    numInput(r, m2.getNum(node, "mSetting"), (v) => {
-      m2.snapshot();
-      m2.setField(node, "mSetting", v);
-    });
+    numInput(r, m2, host, m2.getNum(node, "mSetting"), (v) => m2.setField(node, "mSetting", v));
     r = row(title, "mUserAttribute");
-    numInput(r, m2.getNum(node, "mUserAttribute"), (v) => {
-      m2.snapshot();
-      m2.setField(node, "mUserAttribute", v);
-    });
+    numInput(r, m2, host, m2.getNum(node, "mUserAttribute"), (v) => m2.setField(node, "mUserAttribute", v));
     r = row(title, "全局条件转换");
     checkbox(r, m2.getNum(node, "mExistConditionTrainsitionFromAll") === 1, (v) => {
       m2.snapshot();
@@ -2522,6 +2518,7 @@ ${r.cond}` : ""}`;
     condSelect.addEventListener("change", () => {
       m2.snapshot();
       m2.setField(node, "mConditionTrainsitionFromAllId", Number(condSelect.value));
+      host.requestRender();
     });
     r.appendChild(condSelect);
     const linkCount = m2.linksOf(node).length;
@@ -2555,12 +2552,10 @@ ${r.cond}` : ""}`;
           m2.setField(lk, "mExistCondition", 1);
           m2.setField(lk, "mConditionId", Number(condSel2.value));
         }
+        host.requestRender();
       });
       lb.appendChild(condSel2);
-      textInput(lb, m2.str(lk, "mName"), (v) => {
-        m2.snapshot();
-        m2.setField(lk, "mName", v);
-      });
+      textInput(lb, m2, host, m2.str(lk, "mName"), (v) => m2.setField(lk, "mName", v));
       const btns = document.createElement("span");
       btns.className = "btns";
       button(btns, "↑", () => host.reorderLink(nodeId, idx, -1), "mini").disabled = idx === 0;
@@ -2667,10 +2662,7 @@ ${r.cond}` : ""}`;
       host.requestRender();
     }, "mini");
     r = row(box, "链接名");
-    textInput(r, m2.str(link, "mName"), (v) => {
-      m2.snapshot();
-      m2.setField(link, "mName", v);
-    });
+    textInput(r, m2, host, m2.str(link, "mName"), (v) => m2.setField(link, "mName", v));
     const condId = m2.getNum(link, "mConditionId");
     if (m2.getNum(link, "mExistCondition") === 1 && m2.conditions()[condId]) {
       const embed = document.createElement("div");
@@ -2704,10 +2696,13 @@ ${r.cond}` : ""}`;
     }
     const box = section(root, `条件 #${condIndex}`);
     let r = row(box, "条件号 (mName.mId)");
-    numInput(r, m2.getNum(tree.__vals__["mName"], "mId"), (v) => {
-      m2.snapshot();
-      tree.__vals__["mName"].__vals__["mId"] = v;
-    });
+    numInput(
+      r,
+      m2,
+      host,
+      m2.getNum(tree.__vals__["mName"], "mId"),
+      (v) => m2.setField(tree.__vals__["mName"], "mId", v)
+    );
     r = row(box, "引用次数");
     const usage = document.createElement("span");
     usage.textContent = `${m2.conditionUsage(condIndex)} 处`;
@@ -2748,11 +2743,7 @@ ${r.cond}` : ""}`;
             propIn.type = "text";
             propIn.value = m2.str(vi, "mPropertyName");
             propIn.placeholder = "属性名（如 R）";
-            propIn.addEventListener("change", () => {
-              m2.snapshot();
-              m2.setField(vi, "mPropertyName", propIn.value);
-              host.requestRender();
-            });
+            wireEditing(propIn, m2, host, () => m2.setField(vi, "mPropertyName", propIn.value));
             const dlId = "dl-combine-" + condIndex;
             propIn.setAttribute("list", dlId);
             if (!document.getElementById(dlId)) {
@@ -2770,19 +2761,19 @@ ${r.cond}` : ""}`;
             ownerIn.type = "text";
             ownerIn.value = m2.str(vi, "mOwnerName");
             ownerIn.placeholder = "Owner";
-            ownerIn.addEventListener("change", () => {
-              m2.snapshot();
-              m2.setField(vi, "mOwnerName", ownerIn.value);
-            });
+            wireEditing(ownerIn, m2, host, () => m2.setField(vi, "mOwnerName", ownerIn.value));
             cr.appendChild(ownerIn);
             const idxIn = document.createElement("input");
             idxIn.type = "number";
             idxIn.value = String(m2.getNum(child, "mIndex"));
             idxIn.title = "mIndex";
-            idxIn.addEventListener("change", () => {
-              m2.snapshot();
-              m2.setField(child, "mIndex", Math.trunc(Number(idxIn.value) || 0));
-            });
+            wireEditing(
+              idxIn,
+              m2,
+              host,
+              () => m2.setField(child, "mIndex", Math.trunc(Number(idxIn.value) || 0)),
+              () => idxIn.value.trim() !== "" && !Number.isNaN(Number(idxIn.value))
+            );
             cr.appendChild(idxIn);
           }
         } else {
@@ -2867,6 +2858,7 @@ ${r.cond}` : ""}`;
       op.addEventListener("change", () => {
         m2.snapshot();
         m2.setField(node, "mOperator", Number(op.value));
+        host.requestRender();
       });
       head.appendChild(op);
     } else if (defName.endsWith("VariableNode")) {
@@ -2885,16 +2877,16 @@ ${r.cond}` : ""}`;
       const vi = node.__vals__["mVariable"];
       if (isInstance(vi)) {
         let r2 = row(wrap2, "属性名");
-        textInput(r2, m2.str(vi, "mPropertyName"), (v) => {
-          m2.snapshot();
-          m2.setField(vi, "mPropertyName", v);
-          host.requestRender();
-        }, [.../* @__PURE__ */ new Set([...COMMON_PROPS, ...m2.collectPropertyNames()])]);
+        textInput(
+          r2,
+          m2,
+          host,
+          m2.str(vi, "mPropertyName"),
+          (v) => m2.setField(vi, "mPropertyName", v),
+          [.../* @__PURE__ */ new Set([...COMMON_PROPS, ...m2.collectPropertyNames()])]
+        );
         r2 = row(wrap2, "Owner");
-        textInput(r2, m2.str(vi, "mOwnerName"), (v) => {
-          m2.snapshot();
-          m2.setField(vi, "mOwnerName", v);
-        });
+        textInput(r2, m2, host, m2.str(vi, "mOwnerName"), (v) => m2.setField(vi, "mOwnerName", v));
         r2 = row(wrap2, "IsSingletonOwner");
         checkbox(r2, m2.getNum(vi, "mIsSingletonOwner") === 1, (v) => {
           m2.snapshot();
@@ -2902,10 +2894,7 @@ ${r.cond}` : ""}`;
         });
       }
       let r = row(wrap2, "mIndex");
-      numInput(r, m2.getNum(node, "mIndex"), (v) => {
-        m2.snapshot();
-        m2.setField(node, "mIndex", v);
-      });
+      numInput(r, m2, host, m2.getNum(node, "mIndex"), (v) => m2.setField(node, "mIndex", v));
       r = row(wrap2, "IsBitNo");
       checkbox(r, m2.getNum(node, "mIsBitNo") === 1, (v) => {
         m2.snapshot();
@@ -3339,6 +3328,14 @@ ${r.cond}` : ""}`;
           selection = sel;
         },
         requestRender: () => renderAll(),
+        // live-typing refresh: graph + sidebar + dirty badge only — rebuilding
+        // the inspector here would steal focus from the field being typed in
+        requestLiveRefresh: () => {
+          if (!model) return;
+          $("dirtyBadge").textContent = model.dirty ? "● 未保存" : "";
+          graph.render();
+          renderSide();
+        },
         reorderLink,
         selectNode: (id) => {
           graph.selectNode(id);
